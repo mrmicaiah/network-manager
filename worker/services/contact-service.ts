@@ -19,6 +19,13 @@
  *   for fast query filtering. A weekly cron should recalculate all
  *   contacts' health to keep the denormalized values fresh.
  *
+ * Preferred method & contact kind:
+ *
+ *   preferred_method determines which interaction method scores higher
+ *   points in the dartboard system (50 points vs 25 for non-preferred).
+ *   contact_kind distinguishes kin (family) from non-kin contacts; kin
+ *   get relaxed cadence thresholds per Roberts & Dunbar (2011) research.
+ *
  * Deletion:
  *
  *   Soft delete by default (archived = 1). Hard delete available but
@@ -30,6 +37,8 @@
  *   const contact = await createContact(db, userId, {
  *     name: 'Sarah Chen',
  *     intent: 'nurture',
+ *     preferred_method: 'call',
+ *     contact_kind: 'non_kin',
  *     circle_ids: [friendsCircleId],
  *     source: 'braindump',
  *   });
@@ -41,6 +50,7 @@
  *
  * @see shared/models.ts for ContactRow, CreateContactInput, UpdateContactInput, ContactListFilters
  * @see shared/intent-config.ts for calculateHealthStatus()
+ * @see shared/point-config.ts for dartboard scoring
  */
 
 import type {
@@ -53,6 +63,7 @@ import type {
   ContactListFilters,
   IntentType,
   HealthStatus,
+  ContactKind,
 } from '../../shared/models';
 import { calculateHealthStatus } from '../../shared/intent-config';
 
@@ -107,6 +118,7 @@ export async function createContact(
 ): Promise<ContactWithCircles> {
   const id = crypto.randomUUID();
   const intent: IntentType = input.intent ?? 'new';
+  const contactKind: ContactKind = input.contact_kind ?? 'non_kin';
   const healthStatus = calculateHealthStatus(
     intent,
     null, // new contact — no last_contact_date
@@ -118,8 +130,9 @@ export async function createContact(
     .prepare(
       `INSERT INTO contacts
          (id, user_id, name, phone, email, intent, custom_cadence_days,
-          last_contact_date, health_status, notes, source, archived, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, 0, datetime('now'), datetime('now'))`
+          last_contact_date, health_status, contact_kind, preferred_method,
+          notes, source, archived, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, 0, datetime('now'), datetime('now'))`
     )
     .bind(
       id,
@@ -130,6 +143,8 @@ export async function createContact(
       intent,
       input.custom_cadence_days ?? null,
       healthStatus,
+      contactKind,
+      input.preferred_method ?? null,
       input.notes ?? null,
       input.source ?? 'manual',
     )
@@ -253,6 +268,14 @@ export async function updateContact(
   if (input.custom_cadence_days !== undefined) {
     sets.push('custom_cadence_days = ?');
     binds.push(input.custom_cadence_days);
+  }
+  if (input.contact_kind !== undefined) {
+    sets.push('contact_kind = ?');
+    binds.push(input.contact_kind);
+  }
+  if (input.preferred_method !== undefined) {
+    sets.push('preferred_method = ?');
+    binds.push(input.preferred_method);
   }
   if (input.notes !== undefined) {
     sets.push('notes = ?');
@@ -487,6 +510,11 @@ export async function listContacts(
     binds.push(filters.health_status);
   }
 
+  if (filters?.contact_kind) {
+    conditions.push('c.contact_kind = ?');
+    binds.push(filters.contact_kind);
+  }
+
   if (filters?.search) {
     conditions.push('c.name LIKE ?');
     binds.push(`%${filters.search}%`);
@@ -519,14 +547,14 @@ export async function listContacts(
   const queryBinds = [...binds, limit, offset];
   const { results: rawContacts } = await db
     .prepare(
-      `SELECT DISTINCT c.id, c.name, c.intent, c.health_status, c.last_contact_date
+      `SELECT DISTINCT c.id, c.name, c.intent, c.health_status, c.contact_kind, c.last_contact_date
        FROM contacts c ${circleJoin}
        WHERE ${whereClause}
        ORDER BY c.${safeOrderBy} ${safeOrderDir}
        LIMIT ? OFFSET ?`
     )
     .bind(...queryBinds)
-    .all<Pick<ContactRow, 'id' | 'name' | 'intent' | 'health_status' | 'last_contact_date'>>();
+    .all<Pick<ContactRow, 'id' | 'name' | 'intent' | 'health_status' | 'contact_kind' | 'last_contact_date'>>();
 
   // Batch-fetch circles for all contacts in this page
   const contacts: ContactSummary[] = [];
@@ -542,6 +570,7 @@ export async function listContacts(
         name: row.name,
         intent: row.intent,
         health_status: row.health_status,
+        contact_kind: row.contact_kind,
         last_contact_date: row.last_contact_date,
         circles: circleMap.get(row.id) ?? [],
       });
@@ -572,14 +601,14 @@ export async function searchContacts(
 
   const { results } = await db
     .prepare(
-      `SELECT id, name, intent, health_status, last_contact_date
+      `SELECT id, name, intent, health_status, contact_kind, last_contact_date
        FROM contacts
        WHERE user_id = ? AND archived = 0 AND name LIKE ?
        ORDER BY name COLLATE NOCASE
        LIMIT ?`
     )
     .bind(userId, `%${query}%`, limit)
-    .all<Pick<ContactRow, 'id' | 'name' | 'intent' | 'health_status' | 'last_contact_date'>>();
+    .all<Pick<ContactRow, 'id' | 'name' | 'intent' | 'health_status' | 'contact_kind' | 'last_contact_date'>>();
 
   if (results.length === 0) return [];
 
@@ -593,6 +622,7 @@ export async function searchContacts(
     name: row.name,
     intent: row.intent,
     health_status: row.health_status,
+    contact_kind: row.contact_kind,
     last_contact_date: row.last_contact_date,
     circles: circleMap.get(row.id) ?? [],
   }));
