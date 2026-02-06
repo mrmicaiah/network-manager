@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useApi } from '../hooks/useApi';
 import { Dartboard } from '../components/Dartboard';
+import { UnsortedTab } from '../components/UnsortedTab';
 import { Inbox, Plus, Settings, ChevronRight } from 'lucide-react';
 
 // ===========================================================================
@@ -57,18 +58,6 @@ interface DartboardResponse {
   };
 }
 
-interface UnsortedContact {
-  id: string;
-  name: string;
-  intent: string;
-  createdAt: string;
-}
-
-interface UnsortedResponse {
-  contacts: UnsortedContact[];
-  count: number;
-}
-
 // ===========================================================================
 // Component
 // ===========================================================================
@@ -76,9 +65,10 @@ interface UnsortedResponse {
 export function OverviewPage() {
   const { user } = useAuth();
   const [activeTab, setActiveTab] = useState<string | null>(null);
+  const [unsortedCount, setUnsortedCount] = useState(0);
 
   // Fetch tabs
-  const { data: tabsData, isLoading: tabsLoading } = useApi<DashboardTabsResponse>(
+  const { data: tabsData, isLoading: tabsLoading, refetch: refetchTabs } = useApi<DashboardTabsResponse>(
     '/api/dashboard/tabs'
   );
 
@@ -89,6 +79,13 @@ export function OverviewPage() {
     }
   }, [tabsData, activeTab]);
 
+  // Update unsorted count from tabs data
+  useEffect(() => {
+    if (tabsData) {
+      setUnsortedCount(tabsData.unsortedCount);
+    }
+  }, [tabsData]);
+
   // Fetch dartboard data for active circle
   const { data: dartboardData, isLoading: dartboardLoading } = useApi<DartboardResponse>(
     activeTab && activeTab !== 'unsorted'
@@ -96,20 +93,21 @@ export function OverviewPage() {
       : null
   );
 
-  // Fetch unsorted contacts
-  const { data: unsortedData } = useApi<UnsortedResponse>(
-    activeTab === 'unsorted' ? '/api/dashboard/unsorted' : null
-  );
-
   const firstName = user?.name?.split(' ')[0] || 'there';
   const tabs = tabsData?.tabs ?? [];
-  const unsortedCount = tabsData?.unsortedCount ?? 0;
 
   // Greeting based on time and network state
   const getGreeting = () => {
     const hour = new Date().getHours();
     const timeGreeting = hour < 12 ? 'Morning' : hour < 17 ? 'Afternoon' : 'Evening';
     
+    if (activeTab === 'unsorted') {
+      if (unsortedCount === 0) {
+        return `Good ${timeGreeting}, ${firstName}. Your network is organized.`;
+      }
+      return `Good ${timeGreeting}, ${firstName}. Let's get these contacts sorted.`;
+    }
+
     if (!dartboardData) {
       return `Good ${timeGreeting}, ${firstName}. Here's your network.`;
     }
@@ -127,6 +125,15 @@ export function OverviewPage() {
       return `Good ${timeGreeting}, ${firstName}. Your network looks healthy. Nice work.`;
     }
     return `Good ${timeGreeting}, ${firstName}. A few people could use some love.`;
+  };
+
+  // Handle unsorted count updates from UnsortedTab
+  const handleUnsortedCountChange = (count: number) => {
+    setUnsortedCount(count);
+    // Also refetch tabs to keep everything in sync
+    if (count !== unsortedCount) {
+      refetchTabs();
+    }
   };
 
   return (
@@ -149,7 +156,7 @@ export function OverviewPage() {
 
       {/* Tab bar */}
       <div className="border-b border-gray-200">
-        <nav className="flex gap-1 overflow-x-auto pb-px">
+        <nav className="flex gap-1 overflow-x-auto pb-px scrollbar-hide">
           {tabs.map((tab) => (
             <button
               key={tab.id}
@@ -206,7 +213,7 @@ export function OverviewPage() {
       {tabsLoading ? (
         <LoadingState />
       ) : activeTab === 'unsorted' ? (
-        <UnsortedView contacts={unsortedData?.contacts ?? []} count={unsortedData?.count ?? 0} />
+        <UnsortedTab onCountChange={handleUnsortedCountChange} />
       ) : dartboardLoading ? (
         <LoadingState />
       ) : dartboardData ? (
@@ -244,7 +251,7 @@ function DartboardView({ data }: { data: DartboardResponse }) {
   return (
     <div className="space-y-6">
       {/* Summary stats */}
-      <div className="grid grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         <StatCard
           label="Thriving"
           value={data.summary.thriving}
@@ -277,72 +284,6 @@ function DartboardView({ data }: { data: DartboardResponse }) {
             index={dartboard.index}
             total={dartboard.total}
           />
-        ))}
-      </div>
-    </div>
-  );
-}
-
-// ===========================================================================
-// Unsorted View
-// ===========================================================================
-
-function UnsortedView({ contacts, count }: { contacts: UnsortedContact[]; count: number }) {
-  if (count === 0) {
-    return (
-      <div className="bg-gradient-to-r from-green-50 to-emerald-50 rounded-xl border border-green-100 p-8 text-center">
-        <div className="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
-          <Inbox className="w-6 h-6 text-green-600" />
-        </div>
-        <h3 className="font-medium text-gray-900 mb-2">All caught up!</h3>
-        <p className="text-gray-500">
-          Every contact has been sorted into a circle. Nice work keeping things organized.
-        </p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="space-y-4">
-      <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
-        <p className="text-sm text-amber-800">
-          <strong>{count} contact{count !== 1 ? 's' : ''}</strong> waiting to be sorted.
-          Assign them to circles so they appear on your dartboards.
-        </p>
-      </div>
-
-      {/* Braindump input */}
-      <div className="bg-white rounded-xl border border-gray-200 p-4">
-        <h3 className="font-medium text-gray-900 mb-3">Quick sort with text</h3>
-        <p className="text-sm text-gray-500 mb-3">
-          Tell me about these people and I'll sort them for you.
-        </p>
-        <Link
-          to="/braindump"
-          className="inline-flex items-center gap-2 px-4 py-2 bg-bethany-500 text-white font-medium rounded-lg hover:bg-bethany-600"
-        >
-          Open Braindump
-          <ChevronRight className="w-4 h-4" />
-        </Link>
-      </div>
-
-      {/* Contact list */}
-      <div className="bg-white rounded-xl border border-gray-200 divide-y divide-gray-100">
-        {contacts.map((contact) => (
-          <div key={contact.id} className="p-4 flex items-center justify-between">
-            <div>
-              <p className="font-medium text-gray-900">{contact.name}</p>
-              <p className="text-sm text-gray-500">
-                Added {new Date(contact.createdAt).toLocaleDateString()}
-              </p>
-            </div>
-            <Link
-              to={`/contacts/${contact.id}`}
-              className="text-sm text-bethany-600 hover:text-bethany-700 font-medium"
-            >
-              Sort →
-            </Link>
-          </div>
         ))}
       </div>
     </div>
