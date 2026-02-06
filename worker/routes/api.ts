@@ -60,7 +60,7 @@ import {
   getCircle,
   updateCircle,
   deleteCircle,
-  listCircles,
+  listCirclesWithCounts,
 } from '../services/circle-service';
 import {
   logInteraction,
@@ -457,11 +457,14 @@ async function handleRecalculateHealth(
 // Circles Handlers
 // ===========================================================================
 
+/**
+ * List circles with contact counts for the settings page.
+ */
 async function handleListCircles(
   db: D1Database,
   userId: string,
 ): Promise<Response> {
-  const circles = await listCircles(db, userId);
+  const circles = await listCirclesWithCounts(db, userId);
   return jsonResponse({ data: circles });
 }
 
@@ -481,7 +484,6 @@ async function handleCreateCircle(
 
   const circle = await createCircle(db, userId, {
     name: body.name.trim(),
-    type: 'custom' as CircleType,
     default_cadence_days: body.default_cadence_days ?? null,
   });
 
@@ -525,9 +527,11 @@ async function handleDeleteCircle(
   userId: string,
 ): Promise<Response> {
   const circleId = extractId(path, '/api/circles/');
-  const success = await deleteCircle(db, userId, circleId);
+  const result = await deleteCircle(db, userId, circleId);
 
-  if (!success) return errorResponse('Circle not found or is a default circle', 404);
+  if (!result.deleted) {
+    return errorResponse(result.reason || 'Circle not found', 400);
+  }
   return jsonResponse({ data: { deleted: true } });
 }
 
