@@ -3,10 +3,6 @@ main = "worker/index.ts"
 compatibility_date = "2025-01-01"
 compatibility_flags = ["nodejs_compat"]
 
-# Disable preview URLs and workers.dev subdomain for Durable Objects compatibility
-preview_urls = false
-workers_dev = false
-
 # D1 Database — contact graph, users, interactions
 [[d1_databases]]
 binding = "DB"
