@@ -2,13 +2,22 @@ import { useState, useEffect, useCallback } from 'react';
 
 /**
  * Simple fetch wrapper with loading/error state.
+ * 
+ * Supports conditional fetching by passing null as the URL.
+ * When URL is null, the hook returns { data: null, isLoading: false }
+ * without making a request.
  */
-export function useApi<T>(url: string, options?: RequestInit) {
+export function useApi<T>(url: string | null, options?: RequestInit) {
   const [data, setData] = useState<T | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(url !== null);
   const [error, setError] = useState<string | null>(null);
 
   const fetchData = useCallback(async () => {
+    if (!url) {
+      setIsLoading(false);
+      return;
+    }
+
     setIsLoading(true);
     setError(null);
 
@@ -30,11 +39,16 @@ export function useApi<T>(url: string, options?: RequestInit) {
     } finally {
       setIsLoading(false);
     }
-  }, [url]);
+  }, [url, JSON.stringify(options)]);
 
   useEffect(() => {
-    fetchData();
-  }, [fetchData]);
+    if (url) {
+      fetchData();
+    } else {
+      setData(null);
+      setIsLoading(false);
+    }
+  }, [url, fetchData]);
 
   return { data, isLoading, error, refetch: fetchData };
 }
