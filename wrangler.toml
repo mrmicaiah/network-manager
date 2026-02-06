@@ -55,18 +55,17 @@ new_sqlite_classes = ["OnboardingDO", "UserDiscoveryDO", "NudgeContextDO", "Inte
 #   0 10 * * 1  — Weekly sorting check-in (Monday 4am Central)
 #   0 14 * * *  — Nudge delivery window (8am Central)
 #   0 0 * * *   — Midnight maintenance (trial expiration, usage cleanup)
-#   0 0 * * 0   — Weekly health recalculation (Sunday midnight)
+#   0 6 * * 1   — Weekly health recalculation (Sunday midnight Central = Monday 6am UTC)
 #
 # @see worker/cron/scheduled.ts for job implementations
 # ===========================================================================
 [triggers]
 crons = [
   "0 9 * * *",   # Daily nudge generation (premium/trial)
-  "0 9 * * 1",   # Weekly nudge generation (free tier, Monday only)
   "0 10 * * 1",  # Weekly sorting check-in (Monday, 1hr after nudges)
   "0 14 * * *",  # Nudge delivery (morning window)
   "0 0 * * *",   # Midnight: trial expiration check + usage cleanup
-  "0 0 * * 0",   # Sunday: weekly health recalculation
+  "0 6 * * 1",   # Monday 6am UTC: weekly health recalculation
 ]
 
 [vars]
