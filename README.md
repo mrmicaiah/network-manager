@@ -11,5 +11,8 @@ Worker URL: https://network-manager.mrmicaiah.workers.dev
 ## Features
 
 - Timezone-aware nudge delivery
-- Contact health tracking
+- Contact health tracking  
 - Trial management
+- SMS-based onboarding
+
+v0.10.1
