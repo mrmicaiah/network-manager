@@ -5,6 +5,7 @@ import { DashboardLayout } from './components/DashboardLayout';
 import { LoginPage } from './pages/LoginPage';
 import { OverviewPage } from './pages/OverviewPage';
 import { ContactsPage } from './pages/ContactsPage';
+import ContactDetailPage from './pages/ContactDetailPage';
 import { BraindumpPage } from './pages/BraindumpPage';
 import { ImportPage } from './pages/ImportPage';
 import { SettingsPage } from './pages/SettingsPage';
@@ -27,6 +28,7 @@ export default function App() {
           <Route path="/" element={<Navigate to="/overview" replace />} />
           <Route path="/overview" element={<OverviewPage />} />
           <Route path="/contacts" element={<ContactsPage />} />
+          <Route path="/contacts/:id" element={<ContactDetailPage />} />
           <Route path="/braindump" element={<BraindumpPage />} />
           <Route path="/import" element={<ImportPage />} />
           <Route path="/settings" element={<SettingsPage />} />
