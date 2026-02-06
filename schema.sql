@@ -31,6 +31,8 @@ PRAGMA foreign_keys = ON;
 -- onboarding_stage tracks SMS onboarding flow (NULL = complete).
 -- last_sorting_offer tracks when we last offered to sort unsorted contacts.
 -- last_trial_reminder and trial_reminder_stage track trial lifecycle messaging.
+-- default_circle_id is the dashboard tab that loads first.
+-- circle_tab_order is a JSON array of circle IDs in display order.
 -- @see Roberts & Dunbar (2011, 2015) for gender maintenance patterns.
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS users (
@@ -53,6 +55,8 @@ CREATE TABLE IF NOT EXISTS users (
   last_sorting_offer  TEXT DEFAULT NULL,
   last_trial_reminder TEXT DEFAULT NULL,
   trial_reminder_stage TEXT DEFAULT NULL,
+  default_circle_id   TEXT DEFAULT NULL,
+  circle_tab_order    TEXT DEFAULT NULL,
   created_at          TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -70,6 +74,8 @@ CREATE INDEX IF NOT EXISTS idx_users_subscription ON users(subscription_tier);
 -- interaction logging.
 -- contact_kind distinguishes kin (family) from non-kin contacts.
 -- Kin contacts get relaxed cadence thresholds per Roberts & Dunbar (2011).
+-- preferred_method is the contact's preferred communication method.
+-- When set, this method scores higher points in the dartboard system.
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS contacts (
   id                  TEXT PRIMARY KEY,
@@ -85,6 +91,8 @@ CREATE TABLE IF NOT EXISTS contacts (
     CHECK (health_status IN ('green', 'yellow', 'red')),
   contact_kind        TEXT NOT NULL DEFAULT 'non_kin'
     CHECK (contact_kind IN ('kin', 'non_kin')),
+  preferred_method    TEXT DEFAULT NULL
+    CHECK (preferred_method IS NULL OR preferred_method IN ('text', 'call', 'in_person', 'email', 'video', 'social', 'other')),
   notes               TEXT,
   source              TEXT,
   archived            INTEGER NOT NULL DEFAULT 0,
@@ -162,6 +170,8 @@ CREATE INDEX IF NOT EXISTS idx_contact_circles_circle ON contact_circles(circle_
 -- ---------------------------------------------------------------------------
 -- A logged touchpoint between user and contact. user_id denormalized for
 -- fast per-user queries without joining through contacts.
+-- circle_context is a JSON array of circle IDs this interaction counts for.
+-- NULL means it counts for all circles the contact belongs to.
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS interactions (
   id                  TEXT PRIMARY KEY,
@@ -169,9 +179,10 @@ CREATE TABLE IF NOT EXISTS interactions (
   contact_id          TEXT NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
   date                TEXT NOT NULL,
   method              TEXT NOT NULL DEFAULT 'other'
-    CHECK (method IN ('text', 'call', 'in_person', 'email', 'social', 'other')),
+    CHECK (method IN ('text', 'call', 'in_person', 'email', 'video', 'social', 'other')),
   summary             TEXT,
   logged_via          TEXT NOT NULL DEFAULT 'dashboard',
+  circle_context      TEXT DEFAULT NULL,
   created_at          TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -267,3 +278,33 @@ CREATE INDEX IF NOT EXISTS idx_nudges_user_date
 -- Prevent duplicate nudges for same contact on same day
 CREATE INDEX IF NOT EXISTS idx_nudges_user_contact_date
   ON nudges(user_id, contact_id, scheduled_for);
+
+
+-- ---------------------------------------------------------------------------
+-- CIRCLE_SCORES
+-- ---------------------------------------------------------------------------
+-- Cached relationship scores for dartboard visualization.
+-- Recalculated on interaction log and daily cron.
+-- score is the ratio of points_earned / 100 (required).
+-- status is derived from score thresholds.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS circle_scores (
+  contact_id          TEXT NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+  circle_id           TEXT NOT NULL REFERENCES circles(id) ON DELETE CASCADE,
+  points_earned       INTEGER NOT NULL DEFAULT 0,
+  score               REAL NOT NULL DEFAULT 0,
+  status              TEXT NOT NULL DEFAULT 'drifting'
+    CHECK (status IN ('thriving', 'healthy', 'slipping', 'drifting')),
+  calculated_at       TEXT NOT NULL DEFAULT (datetime('now')),
+
+  PRIMARY KEY (contact_id, circle_id)
+);
+
+-- Dartboard rendering: all contacts in a circle
+CREATE INDEX IF NOT EXISTS idx_circle_scores_circle ON circle_scores(circle_id);
+
+-- Filter by status (e.g., "show drifting contacts")
+CREATE INDEX IF NOT EXISTS idx_circle_scores_status ON circle_scores(circle_id, status);
+
+-- Recalculation cron: find stale scores
+CREATE INDEX IF NOT EXISTS idx_circle_scores_calculated ON circle_scores(calculated_at);
