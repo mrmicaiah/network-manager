@@ -30,7 +30,7 @@ export { NudgeContextDO } from './services/nudge-conversation-flow';
 export { IntentContextDO as IntentSortingDO } from './services/intent-assignment-flow';
 
 const VERSION = {
-  version: '0.11.0',
+  version: '0.11.1',
   updated: '2026-02-06',
   codename: 'network-manager',
 };
@@ -78,8 +78,9 @@ export default {
 
       // ===========================================
       // SMS Webhook (SendBlue inbound)
+      // Accepts both /webhook/sms and /webhook/sendblue
       // ===========================================
-      if (url.pathname === '/webhook/sms' && request.method === 'POST') {
+      if ((url.pathname === '/webhook/sms' || url.pathname === '/webhook/sendblue') && request.method === 'POST') {
         return handleSmsWebhook(request, env, ctx);
       }
 
@@ -111,20 +112,6 @@ export default {
 
   /**
    * Scheduled event handler for Cloudflare Cron Triggers.
-   *
-   * Routes all cron events to the scheduled jobs module which dispatches
-   * to individual job handlers based on the cron expression.
-   *
-   * Cron jobs:
-   *   - Daily nudge generation (3am Central) — premium/trial users
-   *   - Weekly nudge digest (Monday 3am Central) — free tier users
-   *   - Nudge delivery (8am Central) — sends pending nudges via SendBlue
-   *   - Trial expiration check (midnight) — downgrades expired trials
-   *   - Usage data cleanup (midnight) — purges old usage rows
-   *   - Health recalculation (Monday 6am UTC) — refreshes contact health
-   *
-   * @see worker/cron/scheduled.ts for job implementations
-   * @see wrangler.toml [triggers] for cron expressions
    */
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
     ctx.waitUntil(handleScheduled(event, env, ctx));
