@@ -161,6 +161,7 @@ export type InteractionMethod =
   | 'call'       // Phone call
   | 'in_person'  // Face-to-face
   | 'email'      // Email
+  | 'video'      // Video call (Zoom, FaceTime, etc.)
   | 'social'     // Social media
   | 'other';
 
@@ -212,6 +213,14 @@ export type SignupTokenStatus = 'pending' | 'used' | 'expired';
  * Nudge delivery status.
  */
 export type NudgeStatus = 'pending' | 'delivered' | 'dismissed' | 'acted_on';
+
+/**
+ * Circle score status — dartboard positioning based on points.
+ *
+ * @see shared/point-config.ts for thresholds
+ * @see docs/dartboard-system-design.md for full system design
+ */
+export type ScoreStatus = 'thriving' | 'healthy' | 'slipping' | 'drifting';
 
 // ===========================================================================
 // Core Models — D1 Row Types
@@ -274,6 +283,22 @@ export interface UserRow {
    * @see worker/services/trial-messaging-service.ts
    */
   trial_reminder_stage: TrialReminderStage | null;
+  /**
+   * Default circle tab for dashboard.
+   * The tab that loads first when user opens the dashboard.
+   * null = first tab by sort order.
+   *
+   * @see docs/dartboard-system-design.md
+   */
+  default_circle_id: string | null;
+  /**
+   * Circle tab order for dashboard.
+   * JSON array of circle IDs in display order.
+   * null = use sort_order from circles table.
+   *
+   * @see docs/dartboard-system-design.md
+   */
+  circle_tab_order: string | null;
   created_at: string;            // ISO timestamp
   updated_at: string;            // ISO timestamp
 }
@@ -302,6 +327,15 @@ export interface ContactRow {
    * and some family members are estranged).
    */
   contact_kind: ContactKind;
+  /**
+   * The contact's preferred communication method.
+   * When set, this method scores higher points in the dartboard system.
+   * null = no preference (all methods score equally except in_person).
+   *
+   * @see shared/point-config.ts for point values
+   * @see docs/dartboard-system-design.md
+   */
+  preferred_method: InteractionMethod | null;
   notes: string | null;               // Free-form notes about this person
   source: string | null;              // How they were added: 'onboarding', 'braindump', 'manual', 'import'
   archived: number;                   // 0 = active, 1 = archived (soft delete)
@@ -344,7 +378,33 @@ export interface InteractionRow {
   method: InteractionMethod;
   summary: string | null;        // Brief description or AI-generated summary
   logged_via: string;            // 'sms', 'dashboard', 'auto' — how it was recorded
+  /**
+   * Which circles this interaction counts toward for scoring.
+   * JSON array of circle IDs. null = counts for all circles the contact belongs to.
+   *
+   * Used for the "two hats" problem: calling your brother about his kids
+   * might count for Family but not Work, even though he's in both.
+   *
+   * @see docs/dartboard-system-design.md
+   */
+  circle_context: string | null;
   created_at: string;
+}
+
+/**
+ * CircleScore — cached relationship score for a contact in a circle.
+ * Recalculated on interaction log and daily cron.
+ *
+ * @see worker/services/score-service.ts
+ * @see docs/dartboard-system-design.md
+ */
+export interface CircleScoreRow {
+  contact_id: string;            // FK → contacts.id (composite PK)
+  circle_id: string;             // FK → circles.id (composite PK)
+  points_earned: number;         // Points earned in current cadence window
+  score: number;                 // 0.0 to 1.0+ (ratio of earned/required)
+  status: ScoreStatus;           // 'thriving', 'healthy', 'slipping', 'drifting'
+  calculated_at: string;         // ISO timestamp — when last recalculated
 }
 
 /**
@@ -507,6 +567,7 @@ export interface CreateContactInput {
   intent?: IntentType;       // Defaults to 'new'
   custom_cadence_days?: number;
   contact_kind?: ContactKind; // Defaults to 'non_kin'
+  preferred_method?: InteractionMethod;
   notes?: string;
   circle_ids?: string[];     // Circles to link on creation
   source?: string;
@@ -522,6 +583,7 @@ export interface UpdateContactInput {
   intent?: IntentType;
   custom_cadence_days?: number | null;
   contact_kind?: ContactKind;
+  preferred_method?: InteractionMethod | null;
   notes?: string;
   archived?: boolean;
   circle_ids?: string[];     // Replaces all circle links if provided
@@ -536,6 +598,7 @@ export interface LogInteractionInput {
   method: InteractionMethod;
   summary?: string;
   logged_via?: string;       // Defaults to 'dashboard'
+  circle_context?: string[]; // Which circles this counts for (null = all)
 }
 
 /**
