@@ -4,7 +4,8 @@ compatibility_date = "2025-01-01"
 compatibility_flags = ["nodejs_compat"]
 
 # Disable preview URLs — required for Durable Objects on free plan
-preview_urls = false
+[preview_urls]
+enabled = false
 
 # D1 Database — contact graph, users, interactions
 [[d1_databases]]
@@ -74,7 +75,6 @@ crons = [
 [vars]
 # Non-secret config
 ENVIRONMENT = "production"
-BETHANY_WORKER_URL = "https://bethany.mrmicaiah.workers.dev"
 SIGNUP_BASE_URL = "https://app.untitledpublishers.com"
 MAX_FREE_CONTACTS = "15"
 TRIAL_DAYS = "14"
@@ -83,6 +83,6 @@ TRIAL_DAYS = "14"
 # ANTHROPIC_API_KEY      — Claude API for braindump parsing, nudge generation
 # SENDBLUE_API_KEY       — SMS delivery
 # SENDBLUE_API_SECRET    — SMS delivery
-# SENDBLUE_PHONE_NUMBER  — Bethany's phone number
+# SENDBLUE_PHONE_NUMBER  — Bethany's phone number (the assistant)
 # PIN_SIGNING_SECRET     — HMAC signing for PIN verification tokens
-# INTERNAL_API_KEY       — Auth between Bethany worker and Network Manager
+# INTERNAL_API_KEY       — Internal API authentication

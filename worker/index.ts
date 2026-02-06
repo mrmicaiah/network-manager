@@ -1,12 +1,15 @@
 /**
- * Bethany Network Manager — Cloudflare Worker Entry Point
+ * Network Manager — Cloudflare Worker Entry Point
  *
  * Handles:
  *   - Web signup (GET = page, POST = create account)
  *   - SMS webhook routing (inbound messages from SendBlue)
  *   - Dashboard API endpoints
  *   - Cron triggers for nudges and health checks
- *   - Internal API for Bethany worker communication
+ *   - Internal API for service communication
+ *
+ * The assistant personality is named Bethany — she handles all SMS
+ * conversations with users.
  *
  * IMPORTANT: All Durable Object classes MUST be re-exported from this
  * entry point for Wrangler to register them.
@@ -27,9 +30,9 @@ export { NudgeContextDO } from './services/nudge-conversation-flow';
 export { IntentContextDO as IntentSortingDO } from './services/intent-assignment-flow';
 
 const VERSION = {
-  version: '0.10.0',
-  updated: '2026-02-05',
-  codename: 'intent-sorting',
+  version: '0.11.0',
+  updated: '2026-02-06',
+  codename: 'network-manager',
 };
 
 export default {
@@ -55,13 +58,13 @@ export default {
 
       if (url.pathname === '/version') {
         return new Response(
-          `Bethany Network Manager v${VERSION.version} (${VERSION.codename})`,
+          `Network Manager v${VERSION.version} (${VERSION.codename})`,
           { headers: { ...corsHeaders, 'Content-Type': 'text/plain' } }
         );
       }
 
       // ===========================================
-      // Web Signup (TASK-7cfa060a-2)
+      // Web Signup
       // ===========================================
       if (url.pathname === '/signup') {
         if (request.method === 'GET') {
@@ -81,21 +84,21 @@ export default {
       }
 
       // ===========================================
-      // Dashboard API (TASK-c3d31ee9-3)
+      // Dashboard API
       // ===========================================
       if (url.pathname.startsWith('/api/')) {
         return handleApiRoute(request, env, ctx);
       }
 
       // ===========================================
-      // Internal API (Bethany worker → Network Manager)
+      // Internal API
       // ===========================================
       if (url.pathname.startsWith('/internal/')) {
         const apiKey = request.headers.get('X-API-Key');
         if (apiKey !== env.INTERNAL_API_KEY) {
           return errorResponse('Unauthorized', 401);
         }
-        // TODO: TASK — Internal API routes
+        // TODO: Internal API routes
         return errorResponse('Not implemented', 501);
       }
 
@@ -118,7 +121,7 @@ export default {
    *   - Nudge delivery (8am Central) — sends pending nudges via SendBlue
    *   - Trial expiration check (midnight) — downgrades expired trials
    *   - Usage data cleanup (midnight) — purges old usage rows
-   *   - Health recalculation (Sunday midnight) — refreshes contact health
+   *   - Health recalculation (Monday 6am UTC) — refreshes contact health
    *
    * @see worker/cron/scheduled.ts for job implementations
    * @see wrangler.toml [triggers] for cron expressions

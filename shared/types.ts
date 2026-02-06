@@ -1,9 +1,9 @@
 /**
- * Shared type definitions for the Bethany Network Manager.
+ * Network Manager — Shared Type Definitions
  *
  * Env bindings, and re-exports for downstream modules.
- * Data models (Contact, Circle, User, etc.) live in shared/models.ts (TASK-2cbc00d4-4).
- * Intent configuration lives in shared/intent-config.ts (TASK-f94df59b-a).
+ * Data models (Contact, Circle, User, etc.) live in shared/models.ts.
+ * Intent configuration lives in shared/intent-config.ts.
  */
 
 // ---------------------------------------------------------------------------
@@ -37,7 +37,6 @@ export interface Env {
 
   // Vars
   ENVIRONMENT: string;
-  BETHANY_WORKER_URL: string;
   SIGNUP_BASE_URL: string;   // Base URL for signup links
   MAX_FREE_CONTACTS: string; // wrangler vars are always strings
   TRIAL_DAYS: string;
