@@ -141,13 +141,13 @@ export function OverviewPage() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold text-gray-900">
+          <h1 className="font-display text-2xl font-medium text-charcoal">
             {getGreeting()}
           </h1>
         </div>
         <Link
           to="/settings"
-          className="inline-flex items-center gap-2 px-3 py-2 text-sm text-gray-600 hover:text-gray-900"
+          className="inline-flex items-center gap-2 px-3 py-2 text-sm text-charcoal-light hover:text-charcoal transition-colors"
         >
           <Settings className="w-4 h-4" />
           Settings
@@ -155,7 +155,7 @@ export function OverviewPage() {
       </div>
 
       {/* Tab bar */}
-      <div className="border-b border-gray-200">
+      <div className="border-b border-cream-dark">
         <nav className="flex gap-1 overflow-x-auto pb-px scrollbar-hide">
           {tabs.map((tab) => (
             <button
@@ -164,14 +164,14 @@ export function OverviewPage() {
               className={`
                 px-4 py-2 text-sm font-medium whitespace-nowrap border-b-2 transition-colors
                 ${activeTab === tab.id
-                  ? 'border-bethany-500 text-bethany-600'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                  ? 'border-bethany-500 text-bethany-500'
+                  : 'border-transparent text-charcoal-light hover:text-charcoal hover:border-charcoal-300'
                 }
               `}
             >
               {tab.name}
               {tab.contactCount > 0 && (
-                <span className="ml-2 text-xs text-gray-400">
+                <span className="ml-2 text-xs text-charcoal-light">
                   {tab.contactCount}
                 </span>
               )}
@@ -185,8 +185,8 @@ export function OverviewPage() {
               px-4 py-2 text-sm font-medium whitespace-nowrap border-b-2 transition-colors
               flex items-center gap-2
               ${activeTab === 'unsorted'
-                ? 'border-bethany-500 text-bethany-600'
-                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                ? 'border-bethany-500 text-bethany-500'
+                : 'border-transparent text-charcoal-light hover:text-charcoal hover:border-charcoal-300'
               }
             `}
           >
@@ -202,7 +202,7 @@ export function OverviewPage() {
           {/* Add circle button */}
           <Link
             to="/settings#circles"
-            className="px-3 py-2 text-sm text-gray-400 hover:text-gray-600 flex items-center gap-1"
+            className="px-3 py-2 text-sm text-charcoal-300 hover:text-charcoal-light flex items-center gap-1 transition-colors"
           >
             <Plus className="w-4 h-4" />
           </Link>
@@ -232,14 +232,14 @@ export function OverviewPage() {
 function DartboardView({ data }: { data: DartboardResponse }) {
   if (data.totalContacts === 0) {
     return (
-      <div className="bg-white rounded-xl border border-gray-200 p-8 text-center">
-        <h3 className="font-medium text-gray-900 mb-2">No contacts in {data.circleName}</h3>
-        <p className="text-gray-500 mb-4">
+      <div className="card text-center">
+        <h3 className="font-medium text-charcoal mb-2">No contacts in {data.circleName}</h3>
+        <p className="text-charcoal-light mb-4">
           Add contacts to this circle to see them on the dartboard.
         </p>
         <Link
           to="/contacts"
-          className="inline-flex items-center gap-2 px-4 py-2 bg-bethany-500 text-white font-medium rounded-lg hover:bg-bethany-600"
+          className="btn-primary inline-flex"
         >
           Add contacts
           <ChevronRight className="w-4 h-4" />
@@ -255,17 +255,17 @@ function DartboardView({ data }: { data: DartboardResponse }) {
         <StatCard
           label="Thriving"
           value={data.summary.thriving}
-          color="green"
+          color="sage"
         />
         <StatCard
           label="Healthy"
           value={data.summary.healthy}
-          color="blue"
+          color="bethany"
         />
         <StatCard
           label="Slipping"
           value={data.summary.slipping}
-          color="yellow"
+          color="golden"
         />
         <StatCard
           label="Drifting"
@@ -301,17 +301,17 @@ function StatCard({
 }: {
   label: string;
   value: number;
-  color: 'green' | 'blue' | 'yellow' | 'red';
+  color: 'sage' | 'bethany' | 'golden' | 'red';
 }) {
   const colors = {
-    green: 'bg-green-50 text-green-600',
-    blue: 'bg-blue-50 text-blue-600',
-    yellow: 'bg-yellow-50 text-yellow-600',
+    sage: 'bg-sage-50 text-sage-600',
+    bethany: 'bg-bethany-50 text-bethany-600',
+    golden: 'bg-golden-50 text-golden-500',
     red: 'bg-red-50 text-red-600',
   };
 
   return (
-    <div className={`rounded-lg p-4 ${colors[color]}`}>
+    <div className={`rounded-xl p-4 ${colors[color]}`}>
       <p className="text-2xl font-semibold">{value}</p>
       <p className="text-sm opacity-80">{label}</p>
     </div>
@@ -328,14 +328,14 @@ function LoadingState() {
 
 function EmptyState() {
   return (
-    <div className="bg-gradient-to-r from-bethany-50 to-pink-50 rounded-xl border border-bethany-100 p-8 text-center">
-      <h3 className="font-medium text-gray-900 mb-2">Create your first circle</h3>
-      <p className="text-gray-500 mb-4">
+    <div className="bg-gradient-to-r from-bethany-50 to-blush rounded-2xl border border-bethany-100 p-8 text-center">
+      <h3 className="font-display font-medium text-charcoal mb-2">Create your first circle</h3>
+      <p className="text-charcoal-light mb-4">
         Circles help you organize your network by context — Family, Work, Friends, etc.
       </p>
       <Link
         to="/settings#circles"
-        className="inline-flex items-center gap-2 px-4 py-2 bg-bethany-500 text-white font-medium rounded-lg hover:bg-bethany-600"
+        className="btn-primary inline-flex"
       >
         <Plus className="w-4 h-4" />
         Create circle
