@@ -9,7 +9,7 @@
  *   /api/auth/*          — Login, verify, logout, session check
  *   /api/contacts/*      — CRUD, search, health recalculation
  *   /api/circles/*       — CRUD for contact circles
- *   /api/interactions/*  — Log and list interactions
+ *   /api/interactions/*  — Log and list interactions (with circle context)
  *   /api/braindump/*     — Parse natural language contact dumps
  *   /api/export/*        — CSV export with filters
  *   /api/import/*        — CSV import and bulk import flow
@@ -65,6 +65,7 @@ import {
 import {
   logInteraction,
   getInteractionHistory,
+  getInteractionHistoryWithCircles,
   getRecentInteractions,
 } from '../services/interaction-service';
 import { exportContacts, type ExportFilters } from '../services/export-service';
@@ -539,6 +540,23 @@ async function handleDeleteCircle(
 // Interactions Handlers
 // ===========================================================================
 
+/**
+ * Log a new interaction.
+ *
+ * Accepts optional circle_context to specify which circles this interaction
+ * counts toward. This solves the "two hats" problem where your brother
+ * might be in both Family and Work circles, but a call about Dad's birthday
+ * should only count for Family.
+ *
+ * Request body:
+ *   contact_id: string (required)
+ *   method: InteractionMethod (required)
+ *   date?: string (ISO format, defaults to now)
+ *   summary?: string
+ *   circle_context?: string[] (circle IDs, null = counts for all)
+ *
+ * @see docs/dartboard-system-design.md for the two hats problem
+ */
 async function handleLogInteraction(
   request: Request,
   db: D1Database,
@@ -549,6 +567,7 @@ async function handleLogInteraction(
     method: InteractionMethod;
     date?: string;
     summary?: string;
+    circle_context?: string[];
   }>();
 
   if (!body.contact_id) {
@@ -558,17 +577,52 @@ async function handleLogInteraction(
     return errorResponse('method is required', 400);
   }
 
+  // Validate circle_context if provided - ensure they're valid UUIDs
+  if (body.circle_context && body.circle_context.length > 0) {
+    // Verify the circles exist and belong to the user
+    const circleIds = body.circle_context;
+    const placeholders = circleIds.map(() => '?').join(',');
+    const { results: validCircles } = await db
+      .prepare(`SELECT id FROM circles WHERE id IN (${placeholders}) AND user_id = ?`)
+      .bind(...circleIds, userId)
+      .all<{ id: string }>();
+
+    const validIds = new Set(validCircles.map(c => c.id));
+    const invalidIds = circleIds.filter(id => !validIds.has(id));
+
+    if (invalidIds.length > 0) {
+      return errorResponse(`Invalid circle IDs: ${invalidIds.join(', ')}`, 400);
+    }
+  }
+
   const interaction = await logInteraction(db, userId, {
     contact_id: body.contact_id,
     method: body.method,
     date: body.date,
     summary: body.summary,
+    circle_context: body.circle_context,
     logged_via: 'dashboard',
   });
+
+  if (!interaction) {
+    return errorResponse('Contact not found', 404);
+  }
 
   return jsonResponse({ data: interaction }, 201);
 }
 
+/**
+ * List interactions.
+ *
+ * If contact_id is provided, returns interaction history for that contact
+ * with circle names resolved. Otherwise returns recent interactions across
+ * all contacts.
+ *
+ * Query params:
+ *   contact_id?: string - Filter to specific contact
+ *   limit?: number - Max results (default 20, max 100)
+ *   include_circles?: boolean - Include resolved circle names (default true for contact history)
+ */
 async function handleListInteractions(
   url: URL,
   db: D1Database,
@@ -576,10 +630,17 @@ async function handleListInteractions(
 ): Promise<Response> {
   const contactId = url.searchParams.get('contact_id');
   const limit = Math.min(parseInt(url.searchParams.get('limit') ?? '20', 10), 100);
+  const includeCircles = url.searchParams.get('include_circles') !== 'false';
 
   if (contactId) {
-    const result = await getInteractionHistory(db, userId, contactId, limit);
-    return jsonResponse({ data: result.interactions });
+    // Contact-specific history with circle names
+    if (includeCircles) {
+      const result = await getInteractionHistoryWithCircles(db, userId, contactId, limit);
+      return jsonResponse({ data: result.interactions, total: result.total });
+    } else {
+      const result = await getInteractionHistory(db, userId, contactId, limit);
+      return jsonResponse({ data: result.interactions, total: result.total });
+    }
   }
 
   // Recent interactions across all contacts
