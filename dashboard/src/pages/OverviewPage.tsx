@@ -1,34 +1,72 @@
+import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useApi } from '../hooks/useApi';
-import { DonutChartWithLegend } from '../components/DonutChart';
-import { Users, Brain, ArrowRight, TrendingUp, AlertCircle } from 'lucide-react';
+import { Dartboard } from '../components/Dartboard';
+import { Inbox, Plus, Settings, ChevronRight } from 'lucide-react';
 
 // ===========================================================================
 // Types
 // ===========================================================================
 
-interface HealthSummary {
-  total: number;
-  byHealth: {
-    green: number;
-    yellow: number;
-    red: number;
-  };
-  byIntent: {
-    inner_circle: number;
-    nurture: number;
-    maintain: number;
-    transactional: number;
-    dormant: number;
-    new: number;
-  };
-}
-
-interface CircleSummary {
+interface DashboardTab {
   id: string;
   name: string;
   contactCount: number;
+}
+
+interface DashboardTabsResponse {
+  tabs: DashboardTab[];
+  unsortedCount: number;
+  defaultTabId: string | null;
+  tabOrder: string[];
+}
+
+interface DartboardContact {
+  contactId: string;
+  name: string;
+  intent: string;
+  score: number;
+  status: 'thriving' | 'healthy' | 'slipping' | 'drifting';
+  pointsEarned: number;
+  pointsRequired: number;
+  interactionCount: number;
+  lastInteractionDate: string | null;
+  position: {
+    radius: number;
+    angle: number;
+  };
+}
+
+interface DartboardData {
+  index: number;
+  total: number;
+  contacts: DartboardContact[];
+}
+
+interface DartboardResponse {
+  circleId: string;
+  circleName: string;
+  totalContacts: number;
+  dartboards: DartboardData[];
+  summary: {
+    thriving: number;
+    healthy: number;
+    slipping: number;
+    drifting: number;
+  };
+}
+
+interface UnsortedContact {
+  id: string;
+  name: string;
+  intent: string;
+  createdAt: string;
+}
+
+interface UnsortedResponse {
+  contacts: UnsortedContact[];
+  count: number;
 }
 
 // ===========================================================================
@@ -37,39 +75,59 @@ interface CircleSummary {
 
 export function OverviewPage() {
   const { user } = useAuth();
-  const { data: health, isLoading: healthLoading } = useApi<HealthSummary>('/api/contacts/health');
-  const { data: circles } = useApi<CircleSummary[]>('/api/circles');
+  const [activeTab, setActiveTab] = useState<string | null>(null);
+
+  // Fetch tabs
+  const { data: tabsData, isLoading: tabsLoading } = useApi<DashboardTabsResponse>(
+    '/api/dashboard/tabs'
+  );
+
+  // Set initial active tab
+  useEffect(() => {
+    if (tabsData && !activeTab) {
+      setActiveTab(tabsData.defaultTabId || tabsData.tabs[0]?.id || 'unsorted');
+    }
+  }, [tabsData, activeTab]);
+
+  // Fetch dartboard data for active circle
+  const { data: dartboardData, isLoading: dartboardLoading } = useApi<DartboardResponse>(
+    activeTab && activeTab !== 'unsorted'
+      ? `/api/dashboard/dartboard/${activeTab}`
+      : null
+  );
+
+  // Fetch unsorted contacts
+  const { data: unsortedData } = useApi<UnsortedResponse>(
+    activeTab === 'unsorted' ? '/api/dashboard/unsorted' : null
+  );
 
   const firstName = user?.name?.split(' ')[0] || 'there';
+  const tabs = tabsData?.tabs ?? [];
+  const unsortedCount = tabsData?.unsortedCount ?? 0;
 
-  // Health status colors
-  const healthSegments = [
-    { label: 'Healthy', value: health?.byHealth.green ?? 0, color: '#22c55e' },
-    { label: 'Needs attention', value: health?.byHealth.yellow ?? 0, color: '#eab308' },
-    { label: 'Overdue', value: health?.byHealth.red ?? 0, color: '#ef4444' },
-  ];
+  // Greeting based on time and network state
+  const getGreeting = () => {
+    const hour = new Date().getHours();
+    const timeGreeting = hour < 12 ? 'Morning' : hour < 17 ? 'Afternoon' : 'Evening';
+    
+    if (!dartboardData) {
+      return `Good ${timeGreeting}, ${firstName}. Here's your network.`;
+    }
 
-  // Intent breakdown colors
-  const intentSegments = [
-    { label: 'Inner Circle', value: health?.byIntent.inner_circle ?? 0, color: '#8b5cf6' },
-    { label: 'Nurture', value: health?.byIntent.nurture ?? 0, color: '#3b82f6' },
-    { label: 'Maintain', value: health?.byIntent.maintain ?? 0, color: '#06b6d4' },
-    { label: 'Transactional', value: health?.byIntent.transactional ?? 0, color: '#84cc16' },
-    { label: 'Dormant', value: health?.byIntent.dormant ?? 0, color: '#9ca3af' },
-    { label: 'New', value: health?.byIntent.new ?? 0, color: '#f97316' },
-  ];
-
-  // Circle breakdown colors
-  const circleColors = ['#ec4899', '#8b5cf6', '#3b82f6', '#14b8a6', '#f59e0b', '#6b7280'];
-  const circleSegments = (circles ?? []).map((c, i) => ({
-    label: c.name,
-    value: c.contactCount,
-    color: circleColors[i % circleColors.length],
-  }));
-
-  const totalContacts = health?.total ?? 0;
-  const overdueCount = health?.byHealth.red ?? 0;
-  const needsAttentionCount = health?.byHealth.yellow ?? 0;
+    const { summary } = dartboardData;
+    const total = summary.thriving + summary.healthy + summary.slipping + summary.drifting;
+    
+    if (total === 0) {
+      return `Good ${timeGreeting}, ${firstName}. Let's add some people to this circle.`;
+    }
+    if (summary.drifting > 5) {
+      return `Good ${timeGreeting}, ${firstName}. You've got some catching up to do.`;
+    }
+    if (summary.drifting === 0 && summary.slipping === 0) {
+      return `Good ${timeGreeting}, ${firstName}. Your network looks healthy. Nice work.`;
+    }
+    return `Good ${timeGreeting}, ${firstName}. A few people could use some love.`;
+  };
 
   return (
     <div className="space-y-6">
@@ -77,185 +135,270 @@ export function OverviewPage() {
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold text-gray-900">
-            Hey, {firstName} 👋
+            {getGreeting()}
           </h1>
-          <p className="text-gray-500 mt-1">
-            Here's how your network is doing today.
-          </p>
         </div>
-        <div className="flex gap-3">
-          <Link
-            to="/contacts"
-            className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 text-gray-700 font-medium rounded-lg hover:bg-gray-50 transition-colors"
+        <Link
+          to="/settings"
+          className="inline-flex items-center gap-2 px-3 py-2 text-sm text-gray-600 hover:text-gray-900"
+        >
+          <Settings className="w-4 h-4" />
+          Settings
+        </Link>
+      </div>
+
+      {/* Tab bar */}
+      <div className="border-b border-gray-200">
+        <nav className="flex gap-1 overflow-x-auto pb-px">
+          {tabs.map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`
+                px-4 py-2 text-sm font-medium whitespace-nowrap border-b-2 transition-colors
+                ${activeTab === tab.id
+                  ? 'border-bethany-500 text-bethany-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                }
+              `}
+            >
+              {tab.name}
+              {tab.contactCount > 0 && (
+                <span className="ml-2 text-xs text-gray-400">
+                  {tab.contactCount}
+                </span>
+              )}
+            </button>
+          ))}
+
+          {/* Unsorted tab */}
+          <button
+            onClick={() => setActiveTab('unsorted')}
+            className={`
+              px-4 py-2 text-sm font-medium whitespace-nowrap border-b-2 transition-colors
+              flex items-center gap-2
+              ${activeTab === 'unsorted'
+                ? 'border-bethany-500 text-bethany-600'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }
+            `}
           >
-            <Users className="w-4 h-4" />
-            View contacts
-          </Link>
-          <Link
-            to="/braindump"
-            className="inline-flex items-center gap-2 px-4 py-2 bg-bethany-500 text-white font-medium rounded-lg hover:bg-bethany-600 transition-colors"
-          >
-            <Brain className="w-4 h-4" />
-            Braindump
-          </Link>
-        </div>
-      </div>
-
-      {/* Stats row */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <div className="bg-white rounded-xl border border-gray-200 p-5">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-bethany-50 rounded-lg flex items-center justify-center">
-              <Users className="w-5 h-5 text-bethany-600" />
-            </div>
-            <div>
-              <p className="text-2xl font-semibold text-gray-900">
-                {healthLoading ? '—' : totalContacts}
-              </p>
-              <p className="text-sm text-gray-500">Total contacts</p>
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-white rounded-xl border border-gray-200 p-5">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-yellow-50 rounded-lg flex items-center justify-center">
-              <TrendingUp className="w-5 h-5 text-yellow-600" />
-            </div>
-            <div>
-              <p className="text-2xl font-semibold text-gray-900">
-                {healthLoading ? '—' : needsAttentionCount}
-              </p>
-              <p className="text-sm text-gray-500">Needs attention</p>
-            </div>
-          </div>
-        </div>
-
-        <div className="bg-white rounded-xl border border-gray-200 p-5">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-red-50 rounded-lg flex items-center justify-center">
-              <AlertCircle className="w-5 h-5 text-red-600" />
-            </div>
-            <div>
-              <p className="text-2xl font-semibold text-gray-900">
-                {healthLoading ? '—' : overdueCount}
-              </p>
-              <p className="text-sm text-gray-500">Overdue</p>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Charts row */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Health breakdown */}
-        <div className="bg-white rounded-xl border border-gray-200 p-5">
-          <h2 className="font-medium text-gray-900 mb-4">Health status</h2>
-          {totalContacts === 0 ? (
-            <EmptyChartState message="Add contacts to see health stats" />
-          ) : (
-            <DonutChartWithLegend segments={healthSegments} />
-          )}
-        </div>
-
-        {/* Intent breakdown */}
-        <div className="bg-white rounded-xl border border-gray-200 p-5">
-          <h2 className="font-medium text-gray-900 mb-4">By intent</h2>
-          {totalContacts === 0 ? (
-            <EmptyChartState message="Add contacts to see breakdown" />
-          ) : (
-            <DonutChartWithLegend
-              segments={intentSegments.filter((s) => s.value > 0)}
-            />
-          )}
-        </div>
-
-        {/* Circle breakdown */}
-        <div className="bg-white rounded-xl border border-gray-200 p-5">
-          <h2 className="font-medium text-gray-900 mb-4">By circle</h2>
-          {circleSegments.length === 0 || circleSegments.every((s) => s.value === 0) ? (
-            <EmptyChartState message="Organize contacts into circles" />
-          ) : (
-            <DonutChartWithLegend
-              segments={circleSegments.filter((s) => s.value > 0)}
-            />
-          )}
-        </div>
-      </div>
-
-      {/* Action prompts */}
-      {totalContacts === 0 && (
-        <div className="bg-gradient-to-r from-bethany-50 to-pink-50 rounded-xl border border-bethany-100 p-6">
-          <h2 className="font-medium text-gray-900 mb-2">Get started</h2>
-          <p className="text-gray-600 mb-4">
-            Your network is empty! Start by adding the people you want to stay connected with.
-          </p>
-          <div className="flex flex-wrap gap-3">
-            <Link
-              to="/contacts"
-              className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 text-gray-700 font-medium rounded-lg hover:bg-gray-50 transition-colors"
-            >
-              Add a contact
-              <ArrowRight className="w-4 h-4" />
-            </Link>
-            <Link
-              to="/braindump"
-              className="inline-flex items-center gap-2 px-4 py-2 bg-bethany-500 text-white font-medium rounded-lg hover:bg-bethany-600 transition-colors"
-            >
-              Try braindump
-              <ArrowRight className="w-4 h-4" />
-            </Link>
-            <Link
-              to="/import"
-              className="inline-flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 text-gray-700 font-medium rounded-lg hover:bg-gray-50 transition-colors"
-            >
-              Import contacts
-              <ArrowRight className="w-4 h-4" />
-            </Link>
-          </div>
-        </div>
-      )}
-
-      {/* Overdue contacts list */}
-      {overdueCount > 0 && (
-        <div className="bg-white rounded-xl border border-gray-200">
-          <div className="px-5 py-4 border-b border-gray-200 flex items-center justify-between">
-            <h2 className="font-medium text-gray-900">
-              Overdue contacts
-              <span className="ml-2 text-sm font-normal text-gray-500">
-                ({overdueCount})
+            <Inbox className="w-4 h-4" />
+            Unsorted
+            {unsortedCount > 0 && (
+              <span className="px-1.5 py-0.5 text-xs font-medium bg-red-100 text-red-600 rounded-full">
+                {unsortedCount}
               </span>
-            </h2>
-            <Link
-              to="/contacts?health_status=red"
-              className="text-sm text-bethany-600 hover:text-bethany-700 font-medium"
-            >
-              View all
-            </Link>
-          </div>
-          <div className="p-5">
-            <p className="text-gray-500 text-sm">
-              These people haven't heard from you in a while. A quick text goes a long way.
-            </p>
-            {/* TODO: List overdue contacts here */}
-          </div>
-        </div>
-      )}
+            )}
+          </button>
+
+          {/* Add circle button */}
+          <Link
+            to="/settings#circles"
+            className="px-3 py-2 text-sm text-gray-400 hover:text-gray-600 flex items-center gap-1"
+          >
+            <Plus className="w-4 h-4" />
+          </Link>
+        </nav>
+      </div>
+
+      {/* Content */}
+      {tabsLoading ? (
+        <LoadingState />
+      ) : activeTab === 'unsorted' ? (
+        <UnsortedView contacts={unsortedData?.contacts ?? []} count={unsortedData?.count ?? 0} />
+      ) : dartboardLoading ? (
+        <LoadingState />
+      ) : dartboardData ? (
+        <DartboardView data={dartboardData} />
+      ) : tabs.length === 0 ? (
+        <EmptyState />
+      ) : null}
     </div>
   );
 }
 
 // ===========================================================================
-// Empty State
+// Dartboard View
 // ===========================================================================
 
-function EmptyChartState({ message }: { message: string }) {
-  return (
-    <div className="flex items-center gap-4">
-      <div className="w-[100px] h-[100px] rounded-full border-[20px] border-gray-100 flex items-center justify-center">
-        <span className="text-xl font-semibold text-gray-300">0</span>
+function DartboardView({ data }: { data: DartboardResponse }) {
+  if (data.totalContacts === 0) {
+    return (
+      <div className="bg-white rounded-xl border border-gray-200 p-8 text-center">
+        <h3 className="font-medium text-gray-900 mb-2">No contacts in {data.circleName}</h3>
+        <p className="text-gray-500 mb-4">
+          Add contacts to this circle to see them on the dartboard.
+        </p>
+        <Link
+          to="/contacts"
+          className="inline-flex items-center gap-2 px-4 py-2 bg-bethany-500 text-white font-medium rounded-lg hover:bg-bethany-600"
+        >
+          Add contacts
+          <ChevronRight className="w-4 h-4" />
+        </Link>
       </div>
-      <p className="text-sm text-gray-400">{message}</p>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Summary stats */}
+      <div className="grid grid-cols-4 gap-4">
+        <StatCard
+          label="Thriving"
+          value={data.summary.thriving}
+          color="green"
+        />
+        <StatCard
+          label="Healthy"
+          value={data.summary.healthy}
+          color="blue"
+        />
+        <StatCard
+          label="Slipping"
+          value={data.summary.slipping}
+          color="yellow"
+        />
+        <StatCard
+          label="Drifting"
+          value={data.summary.drifting}
+          color="red"
+        />
+      </div>
+
+      {/* Dartboards */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {data.dartboards.map((dartboard) => (
+          <Dartboard
+            key={dartboard.index}
+            contacts={dartboard.contacts}
+            circleName={data.circleName}
+            index={dartboard.index}
+            total={dartboard.total}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ===========================================================================
+// Unsorted View
+// ===========================================================================
+
+function UnsortedView({ contacts, count }: { contacts: UnsortedContact[]; count: number }) {
+  if (count === 0) {
+    return (
+      <div className="bg-gradient-to-r from-green-50 to-emerald-50 rounded-xl border border-green-100 p-8 text-center">
+        <div className="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
+          <Inbox className="w-6 h-6 text-green-600" />
+        </div>
+        <h3 className="font-medium text-gray-900 mb-2">All caught up!</h3>
+        <p className="text-gray-500">
+          Every contact has been sorted into a circle. Nice work keeping things organized.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-amber-50 border border-amber-200 rounded-lg p-4">
+        <p className="text-sm text-amber-800">
+          <strong>{count} contact{count !== 1 ? 's' : ''}</strong> waiting to be sorted.
+          Assign them to circles so they appear on your dartboards.
+        </p>
+      </div>
+
+      {/* Braindump input */}
+      <div className="bg-white rounded-xl border border-gray-200 p-4">
+        <h3 className="font-medium text-gray-900 mb-3">Quick sort with text</h3>
+        <p className="text-sm text-gray-500 mb-3">
+          Tell me about these people and I'll sort them for you.
+        </p>
+        <Link
+          to="/braindump"
+          className="inline-flex items-center gap-2 px-4 py-2 bg-bethany-500 text-white font-medium rounded-lg hover:bg-bethany-600"
+        >
+          Open Braindump
+          <ChevronRight className="w-4 h-4" />
+        </Link>
+      </div>
+
+      {/* Contact list */}
+      <div className="bg-white rounded-xl border border-gray-200 divide-y divide-gray-100">
+        {contacts.map((contact) => (
+          <div key={contact.id} className="p-4 flex items-center justify-between">
+            <div>
+              <p className="font-medium text-gray-900">{contact.name}</p>
+              <p className="text-sm text-gray-500">
+                Added {new Date(contact.createdAt).toLocaleDateString()}
+              </p>
+            </div>
+            <Link
+              to={`/contacts/${contact.id}`}
+              className="text-sm text-bethany-600 hover:text-bethany-700 font-medium"
+            >
+              Sort →
+            </Link>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ===========================================================================
+// Helper Components
+// ===========================================================================
+
+function StatCard({
+  label,
+  value,
+  color,
+}: {
+  label: string;
+  value: number;
+  color: 'green' | 'blue' | 'yellow' | 'red';
+}) {
+  const colors = {
+    green: 'bg-green-50 text-green-600',
+    blue: 'bg-blue-50 text-blue-600',
+    yellow: 'bg-yellow-50 text-yellow-600',
+    red: 'bg-red-50 text-red-600',
+  };
+
+  return (
+    <div className={`rounded-lg p-4 ${colors[color]}`}>
+      <p className="text-2xl font-semibold">{value}</p>
+      <p className="text-sm opacity-80">{label}</p>
+    </div>
+  );
+}
+
+function LoadingState() {
+  return (
+    <div className="flex items-center justify-center py-12">
+      <div className="animate-spin w-8 h-8 border-2 border-bethany-500 border-t-transparent rounded-full" />
+    </div>
+  );
+}
+
+function EmptyState() {
+  return (
+    <div className="bg-gradient-to-r from-bethany-50 to-pink-50 rounded-xl border border-bethany-100 p-8 text-center">
+      <h3 className="font-medium text-gray-900 mb-2">Create your first circle</h3>
+      <p className="text-gray-500 mb-4">
+        Circles help you organize your network by context — Family, Work, Friends, etc.
+      </p>
+      <Link
+        to="/settings#circles"
+        className="inline-flex items-center gap-2 px-4 py-2 bg-bethany-500 text-white font-medium rounded-lg hover:bg-bethany-600"
+      >
+        <Plus className="w-4 h-4" />
+        Create circle
+      </Link>
     </div>
   );
 }
