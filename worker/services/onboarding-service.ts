@@ -11,28 +11,8 @@
  *      explain_features → ready
  *   5. On completion, user record is updated and onboarding state is archived
  *
- * OLD FLOW (deprecated):
- *   User texts first → Bethany collects name → discusses circles → sends signup link
- *   That SMS-first model is gone. The web form is the entry point now.
- *   The send_signup_link stage no longer exists.
- *
  * STATE STORAGE:
  *   Conversation state lives in a Durable Object keyed by phone number.
- *   This gives us:
- *     - Single-writer guarantee (no race conditions on rapid messages)
- *     - Persistent state across Worker invocations
- *     - Automatic hibernation when idle
- *     - WebSocket support if we ever add real-time dashboard updates
- *
- *   State is NOT stored in D1. The Durable Object is the source of truth
- *   during onboarding. On completion, relevant data is written to D1
- *   (circles, preferences) and the DO state is archived to R2.
- *
- * BETHANY'S VOICE:
- *   All outbound messages go through generateBethanyResponse() which calls
- *   the Anthropic API with Bethany's personality config. The stage-specific
- *   prompts guide the conversation but Bethany's voice is always her own —
- *   warm, sharp, real. Never robotic or corporate.
  *
  * @see shared/models.ts for OnboardingStage, OnboardingState
  * @see docs/personality-config.md for Bethany's voice
@@ -43,22 +23,9 @@ import type { Env } from '../../shared/types';
 import type { OnboardingState } from '../../shared/models';
 
 // ===========================================================================
-// Updated Stage Type (replaces old OnboardingStage in models.ts)
+// Updated Stage Type
 // ===========================================================================
 
-/**
- * Post-signup onboarding stages.
- *
- * intro_sent       — Bethany's welcome message was delivered after web signup.
- *                     Waiting for user's first reply.
- * user_replies     — User has responded. Bethany acknowledges and begins
- *                     learning about their world.
- * learn_circles    — Active conversation about who matters to the user.
- *                     Bethany helps identify key relationships and groups.
- * explain_features — Bethany shows what she can do (nudges, check-ins,
- *                     brain dumps, drafting messages).
- * ready            — Onboarding complete. User is oriented and active.
- */
 export type PostSignupStage =
   | 'intro_sent'
   | 'user_replies'
@@ -72,16 +39,16 @@ export type PostSignupStage =
 
 export interface OnboardingConversationState {
   phone: string;
-  userId: string;               // The real user ID from web signup
+  userId: string;
   email: string | null;
   stage: PostSignupStage;
-  name: string;                 // Already known from web signup
-  circlesDiscussed: string[];   // Circles identified during learn_circles
-  peopleDiscussed: Array<{      // Specific people mentioned
+  name: string;
+  circlesDiscussed: string[];
+  peopleDiscussed: Array<{
     name: string;
-    relationship?: string;      // "sister", "college roommate", "boss"
-    circle?: string;            // Which circle they fit
-    notes?: string;             // Anything Bethany picks up
+    relationship?: string;
+    circle?: string;
+    notes?: string;
   }>;
   messages: Array<{
     role: 'user' | 'bethany';
@@ -90,28 +57,21 @@ export interface OnboardingConversationState {
   }>;
   startedAt: string;
   lastMessageAt: string;
-  introMessageId?: string;      // SendBlue message ID for the intro
+  introMessageId?: string;
 }
 
 // ===========================================================================
 // Stage Transition Rules
 // ===========================================================================
 
-/**
- * Valid transitions. Each stage can only move forward.
- * The state machine is linear — no branching, no going back.
- */
 const VALID_TRANSITIONS: Record<PostSignupStage, PostSignupStage | null> = {
   intro_sent: 'user_replies',
   user_replies: 'learn_circles',
   learn_circles: 'explain_features',
   explain_features: 'ready',
-  ready: null, // Terminal state
+  ready: null,
 };
 
-/**
- * Check if a stage transition is valid.
- */
 export function canTransition(from: PostSignupStage, to: PostSignupStage): boolean {
   return VALID_TRANSITIONS[from] === to;
 }
@@ -120,13 +80,6 @@ export function canTransition(from: PostSignupStage, to: PostSignupStage): boole
 // Stage-Specific System Prompts
 // ===========================================================================
 
-/**
- * System prompt fragments injected alongside Bethany's personality config.
- * These guide the conversation at each stage without overriding her voice.
- *
- * The personality config (docs/personality-config.md) is ALWAYS included.
- * These stage prompts add context about what to accomplish in this turn.
- */
 const STAGE_PROMPTS: Record<PostSignupStage, string> = {
   intro_sent: `
     The user just signed up on the web and you've sent your intro message.
@@ -175,9 +128,6 @@ const STAGE_PROMPTS: Record<PostSignupStage, string> = {
     When you've identified the major circles and key people in each,
     transition to explain_features. Don't aim for perfection — they can
     always add more later.
-    
-    IMPORTANT: Track circles and people discussed in your state. The
-    extractCirclesAndPeople function will pull these from the conversation.
   `,
 
   explain_features: `
@@ -193,11 +143,7 @@ const STAGE_PROMPTS: Record<PostSignupStage, string> = {
       and I'll log it"
     - Drafting: "Stuck on what to say? I'll help you draft something"
     
-    Use THEIR people as examples. "So when it's been two weeks since you
-    talked to Jake, I'll give you a nudge. Nothing annoying — just a heads up."
-    
-    Don't over-explain. Don't list everything. Hit the highlights and let
-    them discover the rest naturally.
+    Use THEIR people as examples.
     
     When done, transition to ready. The user is oriented and good to go.
   `,
@@ -210,8 +156,6 @@ const STAGE_PROMPTS: Record<PostSignupStage, string> = {
     
     End with something actionable — not a generic "let me know if you need
     anything" but a specific suggestion based on what you learned.
-    Like: "Your mom hasn't heard from you in a bit — want me to nudge you
-    about that tomorrow morning?"
     
     This is the last onboarding message. After this, they're in the normal
     conversation flow.
@@ -222,19 +166,6 @@ const STAGE_PROMPTS: Record<PostSignupStage, string> = {
 // Onboarding Service
 // ===========================================================================
 
-/**
- * Initialize onboarding state after web signup.
- *
- * Called when the web signup form is completed. Creates the initial state
- * and triggers Bethany's intro message via SendBlue.
- *
- * @param env     - Worker environment bindings
- * @param userId  - The new user's ID (from completeSignup)
- * @param phone   - User's phone number (E.164)
- * @param name    - User's name (from signup form)
- * @param email   - User's email (from signup form)
- * @returns The intro message text and SendBlue message ID
- */
 export async function initializeOnboarding(
   env: Env,
   userId: string,
@@ -244,13 +175,9 @@ export async function initializeOnboarding(
 ): Promise<{ introMessage: string; messageId: string; state: OnboardingConversationState }> {
   const now = new Date().toISOString();
 
-  // Generate Bethany's intro message
   const introMessage = await generateIntroMessage(env, name);
-
-  // Send via SendBlue (this also registers the contact for inbound routing)
   const messageId = await sendViaSendBlue(env, phone, introMessage);
 
-  // Create initial onboarding state
   const state: OnboardingConversationState = {
     phone,
     userId,
@@ -271,41 +198,24 @@ export async function initializeOnboarding(
     introMessageId: messageId,
   };
 
-  // Store in Durable Object
   await storeOnboardingState(env, phone, state);
 
   return { introMessage, messageId, state };
 }
 
-/**
- * Handle an inbound SMS during onboarding.
- *
- * This is the main entry point called by the SMS router when it
- * identifies a message from a user in the onboarding flow.
- *
- * @param env       - Worker environment bindings
- * @param phone     - Sender's phone number (E.164)
- * @param body      - Message text
- * @param userId    - The user's ID
- * @returns Bethany's response and the updated stage
- */
 export async function handleOnboardingMessage(
   env: Env,
   phone: string,
   body: string,
   userId: string,
 ): Promise<{ response: string; stage: PostSignupStage; isComplete: boolean }> {
-  // Load current state
   let state = await loadOnboardingState(env, phone);
 
   if (!state) {
-    // Edge case: state was lost (DO eviction, etc.)
-    // Recreate with minimal info
     console.warn(`[onboarding] State not found for ${phone}, reconstructing`);
     state = await reconstructState(env, phone, userId);
   }
 
-  // Record the inbound message
   const now = new Date().toISOString();
   state.messages.push({
     role: 'user',
@@ -314,42 +224,34 @@ export async function handleOnboardingMessage(
   });
   state.lastMessageAt = now;
 
-  // Determine next stage
   const nextStage = determineNextStage(state, body);
 
   if (nextStage && canTransition(state.stage, nextStage)) {
     state.stage = nextStage;
   }
 
-  // Generate Bethany's response for the current stage
   const response = await generateBethanyResponse(env, state);
 
-  // Record outbound message
   state.messages.push({
     role: 'bethany',
     content: response,
     timestamp: new Date().toISOString(),
   });
 
-  // Extract circles and people from conversation if in learn_circles
   if (state.stage === 'learn_circles' || state.stage === 'explain_features') {
     const extracted = await extractCirclesAndPeople(env, state);
     state.circlesDiscussed = extracted.circles;
     state.peopleDiscussed = extracted.people;
   }
 
-  // Send the response
   await sendViaSendBlue(env, phone, response);
 
-  // Check if onboarding is complete
   const isComplete = state.stage === 'ready';
 
   if (isComplete) {
-    // Finalize: write circles to D1, archive state
     await finalizeOnboarding(env, state);
   }
 
-  // Persist updated state
   await storeOnboardingState(env, phone, state);
 
   return { response, stage: state.stage, isComplete };
@@ -359,16 +261,6 @@ export async function handleOnboardingMessage(
 // Stage Determination
 // ===========================================================================
 
-/**
- * Determine if the conversation should advance to the next stage.
- *
- * This is intentionally simple. The AI generates responses that
- * naturally guide the conversation, and the stage transitions are
- * based on what's been accomplished — not rigid turn counts.
- *
- * The AI itself signals readiness by including transition markers
- * in its response metadata (not shown to user).
- */
 function determineNextStage(
   state: OnboardingConversationState,
   _userMessage: string,
@@ -377,38 +269,28 @@ function determineNextStage(
 
   switch (state.stage) {
     case 'intro_sent':
-      // Any reply from user triggers transition
       return 'user_replies';
 
     case 'user_replies':
-      // After user has shared some initial info (at least 1 exchange),
-      // transition to learning circles. The AI prompt handles the
-      // conversational bridge.
       if (messageCount >= 2) {
         return 'learn_circles';
       }
       return null;
 
     case 'learn_circles':
-      // Transition when we have enough material.
-      // At least 2 circles discussed or 3+ exchanges in this stage.
-      if (
-        state.circlesDiscussed.length >= 2 ||
-        messageCount >= 5
-      ) {
+      if (state.circlesDiscussed.length >= 2 || messageCount >= 5) {
         return 'explain_features';
       }
       return null;
 
     case 'explain_features':
-      // After explaining, any acknowledgment moves to ready.
       if (messageCount >= 7) {
         return 'ready';
       }
       return null;
 
     case 'ready':
-      return null; // Terminal
+      return null;
   }
 }
 
@@ -416,12 +298,6 @@ function determineNextStage(
 // AI Response Generation
 // ===========================================================================
 
-/**
- * Generate Bethany's intro message for a new signup.
- *
- * This is the very first message — sent via SendBlue right after
- * web signup. It should feel personal, not automated.
- */
 async function generateIntroMessage(
   env: Env,
   name: string,
@@ -446,12 +322,6 @@ async function generateIntroMessage(
   return callAnthropicAPI(env, systemPrompt, []);
 }
 
-/**
- * Generate Bethany's response for the current onboarding stage.
- *
- * Combines Bethany's personality config with the stage-specific prompt
- * and the full conversation history.
- */
 async function generateBethanyResponse(
   env: Env,
   state: OnboardingConversationState,
@@ -482,7 +352,6 @@ async function generateBethanyResponse(
     no explanatory text. Just her words.
   `;
 
-  // Convert state messages to Anthropic message format
   const messages = state.messages.map(m => ({
     role: m.role === 'bethany' ? 'assistant' as const : 'user' as const,
     content: m.content,
@@ -495,12 +364,6 @@ async function generateBethanyResponse(
 // Circle & People Extraction
 // ===========================================================================
 
-/**
- * Extract circles and people discussed from the conversation.
- *
- * Uses Claude to analyze the conversation and pull out structured data.
- * This runs after each message in learn_circles and explain_features.
- */
 async function extractCirclesAndPeople(
   env: Env,
   state: OnboardingConversationState,
@@ -541,7 +404,6 @@ async function extractCirclesAndPeople(
 
   try {
     const responseText = await callAnthropicAPI(env, systemPrompt, messages);
-    // Strip any markdown fencing
     const cleaned = responseText.replace(/```json\n?|```\n?/g, '').trim();
     const parsed = JSON.parse(cleaned);
 
@@ -559,16 +421,6 @@ async function extractCirclesAndPeople(
 // Finalization
 // ===========================================================================
 
-/**
- * Finalize onboarding — write discovered data to D1 and archive state.
- *
- * Called when the stage reaches 'ready'. This bridges the conversational
- * data back into the structured system:
- *   - Creates custom circles in D1
- *   - Creates contacts for discussed people
- *   - Archives the conversation to R2
- *   - Marks the user as onboarding-complete
- */
 async function finalizeOnboarding(
   env: Env,
   state: OnboardingConversationState,
@@ -576,7 +428,6 @@ async function finalizeOnboarding(
   const db = env.DB;
   const now = new Date().toISOString();
 
-  // 1. Create custom circles (defaults already exist from signup)
   const defaultNames = new Set(['family', 'friends', 'work', 'community']);
 
   for (const circleName of state.circlesDiscussed) {
@@ -593,7 +444,6 @@ async function finalizeOnboarding(
     }
   }
 
-  // 2. Create contact stubs for discussed people
   for (const person of state.peopleDiscussed) {
     try {
       const contactId = crypto.randomUUID();
@@ -603,7 +453,6 @@ async function finalizeOnboarding(
          VALUES (?, ?, ?, 'new', 'green', 'non_kin', 'onboarding', 0, ?, ?)`
       ).bind(contactId, state.userId, person.name, now, now).run();
 
-      // Link to circle if identified
       if (person.circle) {
         const circle = await db.prepare(
           `SELECT id FROM circles WHERE user_id = ? AND LOWER(name) = LOWER(?)`
@@ -616,11 +465,10 @@ async function finalizeOnboarding(
         }
       }
     } catch {
-      // Non-fatal — user can always add contacts manually
+      // Non-fatal
     }
   }
 
-  // 3. Archive conversation to R2
   try {
     const archiveKey = `onboarding/${state.userId}/${state.startedAt}.json`;
     await env.STORAGE.put(archiveKey, JSON.stringify(state, null, 2));
@@ -638,16 +486,6 @@ async function finalizeOnboarding(
 // Durable Object State Management
 // ===========================================================================
 
-/**
- * Store onboarding state in the Durable Object.
- *
- * The DO is keyed by phone number. This ensures single-writer access
- * and prevents race conditions from rapid messages.
- *
- * Implementation note: The actual Durable Object class is defined
- * separately (see OnboardingDO below). These helpers abstract the
- * fetch-based communication with the DO.
- */
 async function storeOnboardingState(
   env: Env,
   phone: string,
@@ -661,9 +499,6 @@ async function storeOnboardingState(
   }));
 }
 
-/**
- * Load onboarding state from the Durable Object.
- */
 async function loadOnboardingState(
   env: Env,
   phone: string,
@@ -676,12 +511,6 @@ async function loadOnboardingState(
   return response.json();
 }
 
-/**
- * Reconstruct minimal state when DO state is lost.
- *
- * This is a safety net — pulls what we can from D1 and starts
- * the conversation at a reasonable point.
- */
 async function reconstructState(
   env: Env,
   phone: string,
@@ -696,7 +525,7 @@ async function reconstructState(
     phone,
     userId,
     email: user?.email ?? null,
-    stage: 'user_replies', // Assume intro was sent
+    stage: 'user_replies',
     name: user?.name ?? 'there',
     circlesDiscussed: [],
     peopleDiscussed: [],
@@ -710,15 +539,6 @@ async function reconstructState(
 // SendBlue Integration
 // ===========================================================================
 
-/**
- * Send an SMS via SendBlue.
- *
- * Uses the send-message endpoint. On SendBlue's standard plan,
- * sending a message to a number also registers it for inbound
- * webhook routing — which is why the intro message is critical.
- *
- * @returns SendBlue message ID
- */
 async function sendViaSendBlue(
   env: Env,
   phone: string,
@@ -734,7 +554,6 @@ async function sendViaSendBlue(
     body: JSON.stringify({
       number: phone,
       content: message,
-      send_style: 'invisible', // No typing indicator
       from_number: env.SENDBLUE_PHONE_NUMBER,
     }),
   });
@@ -753,12 +572,6 @@ async function sendViaSendBlue(
 // Anthropic API
 // ===========================================================================
 
-/**
- * Call the Anthropic API for response generation.
- *
- * Uses Claude Sonnet for onboarding conversations — fast enough for
- * SMS response times, smart enough for natural conversation.
- */
 async function callAnthropicAPI(
   env: Env,
   systemPrompt: string,
@@ -773,7 +586,7 @@ async function callAnthropicAPI(
     },
     body: JSON.stringify({
       model: 'claude-sonnet-4-5-20250929',
-      max_tokens: 300, // SMS messages should be short
+      max_tokens: 300,
       system: systemPrompt,
       messages: messages.length > 0 ? messages : [
         { role: 'user', content: '(generate the message)' },
@@ -799,17 +612,6 @@ async function callAnthropicAPI(
 // Durable Object Class
 // ===========================================================================
 
-/**
- * OnboardingDO — Durable Object for onboarding conversation state.
- *
- * Provides single-writer access to a user's onboarding state,
- * keyed by phone number. Handles GET (load) and PUT (store) requests.
- *
- * Wrangler config:
- *   [[durable_objects.bindings]]
- *   name = "ONBOARDING_DO"
- *   class_name = "OnboardingDO"
- */
 export class OnboardingDO {
   private state: DurableObjectState;
 
