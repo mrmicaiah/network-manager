@@ -3,8 +3,9 @@ main = "worker/index.ts"
 compatibility_date = "2025-01-01"
 compatibility_flags = ["nodejs_compat"]
 
-# Required for Durable Objects
+# Required for Durable Objects - cannot use preview URLs or workers.dev subdomain
 preview_urls = false
+workers_dev = false
 
 # D1 Database — contact graph, users, interactions
 [[d1_databases]]
@@ -21,33 +22,28 @@ bucket_name = "network-manager-storage"
 # Durable Objects — Conversation State Management
 # ===========================================================================
 
-# Post-signup onboarding conversations
 [[durable_objects.bindings]]
 name = "ONBOARDING_DO"
 class_name = "OnboardingDO"
 
-# Pre-signup discovery conversations (unknown numbers)
 [[durable_objects.bindings]]
 name = "USER_DISCOVERY_DO"
 class_name = "UserDiscoveryDO"
 
-# Pending nudge context for follow-up handling
 [[durable_objects.bindings]]
 name = "NUDGE_CONTEXT_DO"
 class_name = "NudgeContextDO"
 
-# Intent sorting session state
 [[durable_objects.bindings]]
 name = "INTENT_SORTING_DO"
 class_name = "IntentSortingDO"
 
-# Free plan requires new_sqlite_classes instead of new_classes
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["OnboardingDO", "UserDiscoveryDO", "NudgeContextDO", "IntentSortingDO"]
 
 # ===========================================================================
-# Cron Triggers — Scheduled Jobs
+# Cron Triggers
 # ===========================================================================
 [triggers]
 crons = [
