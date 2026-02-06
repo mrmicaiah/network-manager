@@ -47,21 +47,16 @@ new_sqlite_classes = ["OnboardingDO", "UserDiscoveryDO", "NudgeContextDO", "Inte
 # Cron Triggers — Scheduled Jobs
 # ===========================================================================
 #
-# All times are UTC.
-#
-# Hourly trigger handles timezone-aware delivery:
-#   - Checks which users have their preferred hour NOW in their timezone
-#   - Sends nudges only to those users
-#
-# Daily/Weekly triggers for batch processing:
-#   0 0 * * *   — Midnight UTC: trial expiration, usage cleanup
-#   0 6 * * 1   — Monday 6am UTC: weekly health recalculation
+# Hourly trigger handles timezone-aware delivery.
+# Other triggers for batch processing at fixed UTC times.
 #
 # @see worker/cron/scheduled.ts for job implementations
 # ===========================================================================
 [triggers]
 crons = [
   "0 * * * *",   # Hourly: timezone-aware nudge generation & delivery
+  "0 9 * * *",   # 9am UTC: daily trial reminders (fallback for users without timezone)
+  "0 10 * * 1",  # Monday 10am UTC: weekly sorting check-in (fallback)
   "0 0 * * *",   # Midnight UTC: trial expiration + usage cleanup
   "0 6 * * 1",   # Monday 6am UTC: weekly health recalculation
 ]
