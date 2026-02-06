@@ -32,8 +32,10 @@ import {
   User,
   ChevronDown,
   ChevronUp,
+  LayoutGrid,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
+import { TabSettings } from '../components/TabSettings';
 
 // ===========================================================================
 // Types
@@ -816,6 +818,37 @@ export function SettingsPage() {
               Add circle
             </button>
           </div>
+        </div>
+      </CollapsibleSection>
+
+      {/* Dashboard Tab Order */}
+      <CollapsibleSection
+        title="Dashboard Tabs"
+        icon={<LayoutGrid className="w-5 h-5" />}
+        isExpanded={expandedSections.has('tabs')}
+        onToggle={() => toggleSection('tabs')}
+      >
+        <div className="p-5">
+          {circles && circles.length > 0 ? (
+            <TabSettings
+              circles={circles.map((c) => ({
+                id: c.id,
+                name: c.name,
+                type: c.type,
+                contact_count: c.contact_count,
+              }))}
+              defaultTabId={user?.defaultCircleId ?? null}
+              tabOrder={user?.circleTabOrder ?? null}
+              onSave={() => {
+                // Refresh user to get updated preferences
+                refreshUser();
+              }}
+            />
+          ) : (
+            <p className="text-sm text-charcoal-light text-center py-4">
+              No circles to configure. Create circles first.
+            </p>
+          )}
         </div>
       </CollapsibleSection>
 
