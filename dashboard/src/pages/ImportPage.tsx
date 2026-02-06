@@ -51,9 +51,6 @@ John Smith,+15551234567,john@example.com,Met at conference
 Jane Doe,+15559876543,jane@example.com,College friend
 Bob Wilson,,bob@company.com,Work colleague`;
 
-const REQUIRED_COLUMNS = ['name'];
-const OPTIONAL_COLUMNS = ['phone', 'email', 'notes'];
-
 const ACCEPTED_FILE_TYPES = '.csv,.vcf,.vcard';
 
 // ===========================================================================
@@ -74,7 +71,6 @@ export function ImportPage() {
   const { data: circles } = useApi<Circle[]>('/api/circles');
   const { execute: createContact } = useLazyApi();
 
-  // Download CSV template
   const handleDownloadTemplate = () => {
     const blob = new Blob([CSV_TEMPLATE], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
@@ -85,29 +81,24 @@ export function ImportPage() {
     URL.revokeObjectURL(url);
   };
 
-  // Parse CSV file
   const parseCSV = useCallback((text: string): ParsedRow[] => {
     const lines = text.trim().split('\n');
     if (lines.length < 2) {
       throw new Error('CSV must have a header row and at least one data row');
     }
 
-    // Parse header
     const header = lines[0].toLowerCase().split(',').map((h) => h.trim().replace(/^"|"$/g, ''));
     
-    // Check for required columns
     const hasName = header.includes('name');
     if (!hasName) {
       throw new Error('CSV must have a "name" column');
     }
 
-    // Map column indices
     const nameIdx = header.indexOf('name');
     const phoneIdx = header.indexOf('phone');
     const emailIdx = header.indexOf('email');
     const notesIdx = header.indexOf('notes');
 
-    // Parse data rows
     const rows: ParsedRow[] = [];
     for (let i = 1; i < lines.length; i++) {
       const line = lines[i].trim();
@@ -125,7 +116,6 @@ export function ImportPage() {
       const email = emailIdx >= 0 ? (values[emailIdx] || '').trim() : '';
       const notes = notesIdx >= 0 ? (values[notesIdx] || '').trim() : '';
 
-      // Validate
       let isValid = true;
       let error: string | undefined;
 
@@ -146,14 +136,9 @@ export function ImportPage() {
     return rows;
   }, []);
 
-  // Parse vCard file
   const parseVCard = useCallback((text: string): ParsedRow[] => {
     const rows: ParsedRow[] = [];
-
-    // Unfold continuation lines
     const unfolded = text.replace(/\r?\n[ \t]/g, '');
-
-    // Split into individual vCard blocks
     const blocks = unfolded.split(/(?=BEGIN:VCARD)/i);
 
     for (const block of blocks) {
@@ -183,12 +168,10 @@ export function ImportPage() {
         const propName = (semiIdx >= 0 ? propertyPart.substring(0, semiIdx) : propertyPart).toUpperCase();
         const params = semiIdx >= 0 ? propertyPart.substring(semiIdx + 1).toUpperCase() : '';
 
-        // Decode QUOTED-PRINTABLE
         if (params.includes('ENCODING=QUOTED-PRINTABLE')) {
           value = decodeQuotedPrintable(value);
         }
 
-        // Unescape vCard special chars
         value = value.replace(/\\n/gi, ' ').replace(/\\,/g, ',').replace(/\\;/g, ';').replace(/\\\\/g, '\\');
 
         switch (propName) {
@@ -219,12 +202,10 @@ export function ImportPage() {
         }
       }
 
-      // Fallback to structured name
       if (!name && structuredName) {
         name = structuredName;
       }
 
-      // Validate
       let isValid = true;
       let error: string | undefined;
 
@@ -237,7 +218,6 @@ export function ImportPage() {
       }
 
       const rawRow: Record<string, string> = { name, phone, email, notes };
-
       rows.push({ name: name || '(unnamed)', phone, email, notes, rawRow, isValid, error });
     }
 
@@ -248,7 +228,6 @@ export function ImportPage() {
     return rows;
   }, []);
 
-  // Handle file selection
   const handleFile = useCallback((file: File) => {
     setParseError(null);
     setFileType(null);
@@ -266,8 +245,6 @@ export function ImportPage() {
     reader.onload = (e) => {
       try {
         const text = e.target?.result as string;
-
-        // Auto-detect: even if extension is .csv, check if it's actually a vCard
         const looksLikeVCard = text.trim().startsWith('BEGIN:VCARD');
 
         let rows: ParsedRow[];
@@ -296,7 +273,6 @@ export function ImportPage() {
     reader.readAsText(file);
   }, [parseCSV, parseVCard]);
 
-  // Drag and drop handlers
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(true);
@@ -315,18 +291,15 @@ export function ImportPage() {
     if (file) handleFile(file);
   }, [handleFile]);
 
-  // File input change
   const handleFileInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) handleFile(file);
   }, [handleFile]);
 
-  // Remove a row from preview
   const handleRemoveRow = useCallback((index: number) => {
     setParsedRows((prev) => prev.filter((_, i) => i !== index));
   }, []);
 
-  // Start import
   const handleImport = useCallback(async () => {
     const validRows = parsedRows.filter((r) => r.isValid);
     if (validRows.length === 0) return;
@@ -356,7 +329,6 @@ export function ImportPage() {
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : 'Unknown error';
         
-        // Check for duplicate
         if (errorMsg.includes('duplicate') || errorMsg.includes('already exists')) {
           results.push({ status: 'skipped', name: row.name, error: 'Already exists' });
         } else {
@@ -371,7 +343,6 @@ export function ImportPage() {
     setViewState('complete');
   }, [parsedRows, selectedCircleId, createContact]);
 
-  // Reset to start
   const handleReset = useCallback(() => {
     setViewState('upload');
     setParsedRows([]);
@@ -385,7 +356,6 @@ export function ImportPage() {
     }
   }, []);
 
-  // Count stats
   const validCount = parsedRows.filter((r) => r.isValid).length;
   const invalidCount = parsedRows.filter((r) => !r.isValid).length;
   const successCount = importResults.filter((r) => r.status === 'success').length;
@@ -396,8 +366,8 @@ export function ImportPage() {
     <div className="max-w-4xl mx-auto">
       {/* Header */}
       <div className="mb-6">
-        <h1 className="text-2xl font-semibold text-gray-900 mb-2">Import Contacts</h1>
-        <p className="text-gray-500">
+        <h1 className="font-display text-2xl font-medium text-charcoal mb-2">Import Contacts</h1>
+        <p className="text-charcoal-light">
           Upload a CSV or vCard (.vcf) file to import your contacts in bulk.
         </p>
       </div>
@@ -410,10 +380,10 @@ export function ImportPage() {
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
             onDrop={handleDrop}
-            className={`bg-white rounded-xl border-2 border-dashed p-12 text-center transition-colors ${
+            className={`bg-warm-white rounded-2xl border-2 border-dashed p-12 text-center transition-colors shadow-soft ${
               isDragging
                 ? 'border-bethany-500 bg-bethany-50'
-                : 'border-gray-300 hover:border-gray-400'
+                : 'border-charcoal-300 hover:border-charcoal-400'
             }`}
           >
             <input
@@ -424,26 +394,26 @@ export function ImportPage() {
               className="hidden"
             />
             
-            <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
-              <Upload className="w-8 h-8 text-gray-400" />
+            <div className="w-16 h-16 bg-cream-dark rounded-full flex items-center justify-center mx-auto mb-4">
+              <Upload className="w-8 h-8 text-charcoal-400" />
             </div>
             
-            <h2 className="text-lg font-medium text-gray-900 mb-2">
+            <h2 className="text-lg font-medium text-charcoal mb-2">
               Drop your file here
             </h2>
-            <p className="text-gray-500 mb-4">
+            <p className="text-charcoal-light mb-4">
               Supports CSV and vCard (.vcf) files
             </p>
             
             <button
               onClick={() => fileInputRef.current?.click()}
-              className="px-5 py-2.5 bg-bethany-500 text-white font-medium rounded-lg hover:bg-bethany-600 transition-colors"
+              className="btn-primary"
             >
               Choose File
             </button>
 
             {parseError && (
-              <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-600">
+              <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-600">
                 <AlertCircle className="w-4 h-4 inline mr-2" />
                 {parseError}
               </div>
@@ -451,14 +421,14 @@ export function ImportPage() {
           </div>
 
           {/* iPhone vCard tip */}
-          <div className="bg-blue-50 rounded-xl p-6">
+          <div className="bg-blue-50 rounded-2xl p-6 border border-blue-100">
             <div className="flex items-start gap-4">
-              <div className="w-10 h-10 bg-white rounded-lg flex items-center justify-center flex-shrink-0">
+              <div className="w-10 h-10 bg-warm-white rounded-xl flex items-center justify-center flex-shrink-0 shadow-soft">
                 <Smartphone className="w-5 h-5 text-blue-600" />
               </div>
               <div className="flex-1">
-                <h3 className="font-medium text-gray-900 mb-1">Importing from iPhone?</h3>
-                <p className="text-sm text-gray-600">
+                <h3 className="font-medium text-charcoal mb-1">Importing from iPhone?</h3>
+                <p className="text-sm text-charcoal-light">
                   Open Contacts, select the contacts you want, tap Share, then choose "Export vCard".
                   Upload the .vcf file here and Bethany will handle the rest.
                 </p>
@@ -467,14 +437,14 @@ export function ImportPage() {
           </div>
 
           {/* Template download */}
-          <div className="bg-gray-50 rounded-xl p-6">
+          <div className="bg-cream rounded-2xl p-6 border border-cream-dark">
             <div className="flex items-start gap-4">
-              <div className="w-10 h-10 bg-white rounded-lg flex items-center justify-center flex-shrink-0">
-                <FileSpreadsheet className="w-5 h-5 text-gray-600" />
+              <div className="w-10 h-10 bg-warm-white rounded-xl flex items-center justify-center flex-shrink-0 shadow-soft">
+                <FileSpreadsheet className="w-5 h-5 text-charcoal-600" />
               </div>
               <div className="flex-1">
-                <h3 className="font-medium text-gray-900 mb-1">Prefer a spreadsheet?</h3>
-                <p className="text-sm text-gray-500 mb-3">
+                <h3 className="font-medium text-charcoal mb-1">Prefer a spreadsheet?</h3>
+                <p className="text-sm text-charcoal-light mb-3">
                   Download our CSV template with the correct columns: name, phone, email, and notes.
                 </p>
                 <button
@@ -489,23 +459,23 @@ export function ImportPage() {
           </div>
 
           {/* Format requirements */}
-          <div className="bg-white rounded-xl border border-gray-200 p-6">
-            <h3 className="font-medium text-gray-900 mb-3">Supported formats</h3>
-            <ul className="text-sm text-gray-600 space-y-2">
+          <div className="card">
+            <h3 className="font-medium text-charcoal mb-3">Supported formats</h3>
+            <ul className="text-sm text-charcoal-light space-y-2">
               <li className="flex items-start gap-2">
-                <Check className="w-4 h-4 text-green-500 mt-0.5 flex-shrink-0" />
-                <span><strong>vCard (.vcf)</strong> — Exported from iPhone, Android, Google Contacts, or Outlook</span>
+                <Check className="w-4 h-4 text-sage-500 mt-0.5 flex-shrink-0" />
+                <span><strong className="text-charcoal">vCard (.vcf)</strong> — Exported from iPhone, Android, Google Contacts, or Outlook</span>
               </li>
               <li className="flex items-start gap-2">
-                <Check className="w-4 h-4 text-green-500 mt-0.5 flex-shrink-0" />
-                <span><strong>CSV</strong> — Spreadsheet with <strong>name</strong> column (required), plus optional phone, email, notes</span>
+                <Check className="w-4 h-4 text-sage-500 mt-0.5 flex-shrink-0" />
+                <span><strong className="text-charcoal">CSV</strong> — Spreadsheet with <strong>name</strong> column (required), plus optional phone, email, notes</span>
               </li>
               <li className="flex items-start gap-2">
-                <Check className="w-4 h-4 text-green-500 mt-0.5 flex-shrink-0" />
+                <Check className="w-4 h-4 text-sage-500 mt-0.5 flex-shrink-0" />
                 <span>Multi-contact files are supported (batch import)</span>
               </li>
               <li className="flex items-start gap-2">
-                <Check className="w-4 h-4 text-green-500 mt-0.5 flex-shrink-0" />
+                <Check className="w-4 h-4 text-sage-500 mt-0.5 flex-shrink-0" />
                 <span>Phone numbers should include country code (e.g., +1 for US)</span>
               </li>
             </ul>
@@ -517,18 +487,18 @@ export function ImportPage() {
       {viewState === 'preview' && (
         <div className="space-y-4">
           {/* Summary bar */}
-          <div className="bg-white rounded-xl border border-gray-200 p-4 flex items-center justify-between">
+          <div className="card flex items-center justify-between">
             <div className="flex items-center gap-4">
-              <span className="text-sm text-gray-600">
-                <strong className="text-gray-900">{parsedRows.length}</strong> contact{parsedRows.length !== 1 ? 's' : ''} found
+              <span className="text-sm text-charcoal-light">
+                <strong className="text-charcoal">{parsedRows.length}</strong> contact{parsedRows.length !== 1 ? 's' : ''} found
                 {fileType && (
-                  <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
+                  <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-cream-dark text-charcoal-light">
                     {fileType === 'vcf' ? 'vCard' : 'CSV'}
                   </span>
                 )}
               </span>
               {invalidCount > 0 && (
-                <span className="text-sm text-orange-600">
+                <span className="text-sm text-golden-600">
                   <AlertTriangle className="w-4 h-4 inline mr-1" />
                   {invalidCount} with errors
                 </span>
@@ -536,22 +506,22 @@ export function ImportPage() {
             </div>
             <button
               onClick={handleReset}
-              className="text-sm text-gray-500 hover:text-gray-700"
+              className="text-sm text-charcoal-light hover:text-charcoal"
             >
               Start over
             </button>
           </div>
 
           {/* Circle selector */}
-          <div className="bg-white rounded-xl border border-gray-200 p-4">
-            <label className="block text-sm font-medium text-gray-700 mb-2">
+          <div className="card">
+            <label className="block text-sm font-medium text-charcoal mb-2">
               Add all contacts to a circle (optional)
             </label>
             <div className="relative">
               <select
                 value={selectedCircleId}
                 onChange={(e) => setSelectedCircleId(e.target.value)}
-                className="w-full md:w-64 appearance-none px-4 py-2 pr-10 border border-gray-300 rounded-lg bg-white focus:ring-2 focus:ring-bethany-500 focus:border-transparent outline-none"
+                className="input-field !w-full md:!w-64"
               >
                 <option value="">No circle</option>
                 {circles?.map((circle) => (
@@ -560,30 +530,29 @@ export function ImportPage() {
                   </option>
                 ))}
               </select>
-              <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
             </div>
           </div>
 
           {/* Preview table */}
-          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+          <div className="card !p-0 overflow-hidden">
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
-                <thead className="bg-gray-50 border-b border-gray-200">
+                <thead className="bg-cream border-b border-cream-dark">
                   <tr>
-                    <th className="px-4 py-3 text-left font-medium text-gray-500">Status</th>
-                    <th className="px-4 py-3 text-left font-medium text-gray-500">Name</th>
-                    <th className="px-4 py-3 text-left font-medium text-gray-500">Phone</th>
-                    <th className="px-4 py-3 text-left font-medium text-gray-500">Email</th>
-                    <th className="px-4 py-3 text-left font-medium text-gray-500">Notes</th>
-                    <th className="px-4 py-3 text-right font-medium text-gray-500"></th>
+                    <th className="px-4 py-3 text-left font-medium text-charcoal-light">Status</th>
+                    <th className="px-4 py-3 text-left font-medium text-charcoal-light">Name</th>
+                    <th className="px-4 py-3 text-left font-medium text-charcoal-light">Phone</th>
+                    <th className="px-4 py-3 text-left font-medium text-charcoal-light">Email</th>
+                    <th className="px-4 py-3 text-left font-medium text-charcoal-light">Notes</th>
+                    <th className="px-4 py-3 text-right font-medium text-charcoal-light"></th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-gray-200">
+                <tbody className="divide-y divide-cream-dark">
                   {parsedRows.slice(0, 50).map((row, index) => (
                     <tr key={index} className={row.isValid ? '' : 'bg-red-50'}>
                       <td className="px-4 py-3">
                         {row.isValid ? (
-                          <CheckCircle2 className="w-4 h-4 text-green-500" />
+                          <CheckCircle2 className="w-4 h-4 text-sage-500" />
                         ) : (
                           <span className="flex items-center gap-1 text-red-600">
                             <XCircle className="w-4 h-4" />
@@ -591,14 +560,14 @@ export function ImportPage() {
                           </span>
                         )}
                       </td>
-                      <td className="px-4 py-3 font-medium text-gray-900">{row.name || '\u2014'}</td>
-                      <td className="px-4 py-3 text-gray-600">{row.phone || '\u2014'}</td>
-                      <td className="px-4 py-3 text-gray-600">{row.email || '\u2014'}</td>
-                      <td className="px-4 py-3 text-gray-600 max-w-xs truncate">{row.notes || '\u2014'}</td>
+                      <td className="px-4 py-3 font-medium text-charcoal">{row.name || '\u2014'}</td>
+                      <td className="px-4 py-3 text-charcoal-light">{row.phone || '\u2014'}</td>
+                      <td className="px-4 py-3 text-charcoal-light">{row.email || '\u2014'}</td>
+                      <td className="px-4 py-3 text-charcoal-light max-w-xs truncate">{row.notes || '\u2014'}</td>
                       <td className="px-4 py-3 text-right">
                         <button
                           onClick={() => handleRemoveRow(index)}
-                          className="p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded"
+                          className="p-1 text-charcoal-400 hover:text-charcoal-600 hover:bg-cream-dark rounded-xl"
                           title="Remove row"
                         >
                           <X className="w-4 h-4" />
@@ -611,20 +580,20 @@ export function ImportPage() {
             </div>
             
             {parsedRows.length > 50 && (
-              <div className="px-4 py-3 bg-gray-50 border-t border-gray-200 text-sm text-gray-500 text-center">
+              <div className="px-4 py-3 bg-cream border-t border-cream-dark text-sm text-charcoal-light text-center">
                 Showing first 50 of {parsedRows.length} contacts
               </div>
             )}
           </div>
 
           {/* Import button */}
-          <div className="bg-white rounded-xl border border-gray-200 p-4 flex items-center justify-between">
+          <div className="card flex items-center justify-between">
             <div>
-              <p className="font-medium text-gray-900">
+              <p className="font-medium text-charcoal">
                 Import {validCount} contact{validCount !== 1 ? 's' : ''}?
               </p>
               {invalidCount > 0 && (
-                <p className="text-sm text-gray-500">
+                <p className="text-sm text-charcoal-light">
                   {invalidCount} contact{invalidCount !== 1 ? 's' : ''} with errors will be skipped
                 </p>
               )}
@@ -632,7 +601,7 @@ export function ImportPage() {
             <button
               onClick={handleImport}
               disabled={validCount === 0}
-              className="px-5 py-2.5 bg-bethany-500 text-white font-medium rounded-lg hover:bg-bethany-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+              className="btn-primary"
             >
               <Upload className="w-4 h-4" />
               Import
@@ -643,24 +612,24 @@ export function ImportPage() {
 
       {/* Importing View */}
       {viewState === 'importing' && (
-        <div className="bg-white rounded-xl border border-gray-200 p-12 text-center">
+        <div className="card text-center">
           <div className="w-16 h-16 bg-bethany-50 rounded-full flex items-center justify-center mx-auto mb-4">
             <Loader2 className="w-8 h-8 text-bethany-500 animate-spin" />
           </div>
-          <h2 className="text-lg font-medium text-gray-900 mb-2">Importing contacts...</h2>
-          <p className="text-gray-500 mb-6">
+          <h2 className="text-lg font-medium text-charcoal mb-2">Importing contacts...</h2>
+          <p className="text-charcoal-light mb-6">
             Please don't close this page
           </p>
           
           {/* Progress bar */}
           <div className="max-w-xs mx-auto">
-            <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+            <div className="h-2 bg-cream-dark rounded-full overflow-hidden">
               <div
                 className="h-full bg-bethany-500 transition-all duration-300"
                 style={{ width: `${importProgress}%` }}
               />
             </div>
-            <p className="text-sm text-gray-500 mt-2">{importProgress}%</p>
+            <p className="text-sm text-charcoal-light mt-2">{importProgress}%</p>
           </div>
         </div>
       )}
@@ -669,27 +638,27 @@ export function ImportPage() {
       {viewState === 'complete' && (
         <div className="space-y-4">
           {/* Summary */}
-          <div className="bg-white rounded-xl border border-gray-200 p-8 text-center">
-            <div className="w-16 h-16 bg-green-50 rounded-full flex items-center justify-center mx-auto mb-4">
-              <Check className="w-8 h-8 text-green-500" />
+          <div className="card text-center">
+            <div className="w-16 h-16 bg-sage-50 rounded-full flex items-center justify-center mx-auto mb-4">
+              <Check className="w-8 h-8 text-sage-500" />
             </div>
-            <h2 className="text-lg font-medium text-gray-900 mb-4">Import complete!</h2>
+            <h2 className="text-lg font-medium text-charcoal mb-4">Import complete!</h2>
             
             <div className="flex items-center justify-center gap-6 mb-6">
               <div className="text-center">
-                <p className="text-2xl font-semibold text-green-600">{successCount}</p>
-                <p className="text-sm text-gray-500">Imported</p>
+                <p className="text-2xl font-semibold text-sage-600">{successCount}</p>
+                <p className="text-sm text-charcoal-light">Imported</p>
               </div>
               {skippedCount > 0 && (
                 <div className="text-center">
-                  <p className="text-2xl font-semibold text-yellow-600">{skippedCount}</p>
-                  <p className="text-sm text-gray-500">Skipped</p>
+                  <p className="text-2xl font-semibold text-golden-500">{skippedCount}</p>
+                  <p className="text-sm text-charcoal-light">Skipped</p>
                 </div>
               )}
               {errorCount > 0 && (
                 <div className="text-center">
                   <p className="text-2xl font-semibold text-red-600">{errorCount}</p>
-                  <p className="text-sm text-gray-500">Failed</p>
+                  <p className="text-sm text-charcoal-light">Failed</p>
                 </div>
               )}
             </div>
@@ -697,13 +666,13 @@ export function ImportPage() {
             <div className="flex items-center justify-center gap-3">
               <button
                 onClick={handleReset}
-                className="px-5 py-2.5 bg-bethany-500 text-white font-medium rounded-lg hover:bg-bethany-600 transition-colors"
+                className="btn-primary"
               >
                 Import More
               </button>
               <a
                 href="/contacts"
-                className="px-5 py-2.5 border border-gray-300 text-gray-700 font-medium rounded-lg hover:bg-gray-50 transition-colors"
+                className="btn-secondary"
               >
                 View Contacts
               </a>
@@ -712,28 +681,28 @@ export function ImportPage() {
 
           {/* Results detail */}
           {(skippedCount > 0 || errorCount > 0) && (
-            <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-              <div className="px-4 py-3 bg-gray-50 border-b border-gray-200">
-                <h3 className="font-medium text-gray-900">Import details</h3>
+            <div className="card !p-0 overflow-hidden">
+              <div className="px-4 py-3 bg-cream border-b border-cream-dark">
+                <h3 className="font-medium text-charcoal">Import details</h3>
               </div>
               <div className="max-h-64 overflow-y-auto">
                 <table className="w-full text-sm">
-                  <tbody className="divide-y divide-gray-200">
+                  <tbody className="divide-y divide-cream-dark">
                     {importResults.map((result, index) => (
                       <tr key={index}>
                         <td className="px-4 py-2">
                           {result.status === 'success' && (
-                            <CheckCircle2 className="w-4 h-4 text-green-500" />
+                            <CheckCircle2 className="w-4 h-4 text-sage-500" />
                           )}
                           {result.status === 'skipped' && (
-                            <AlertTriangle className="w-4 h-4 text-yellow-500" />
+                            <AlertTriangle className="w-4 h-4 text-golden-500" />
                           )}
                           {result.status === 'error' && (
                             <XCircle className="w-4 h-4 text-red-500" />
                           )}
                         </td>
-                        <td className="px-4 py-2 font-medium text-gray-900">{result.name}</td>
-                        <td className="px-4 py-2 text-gray-500">
+                        <td className="px-4 py-2 font-medium text-charcoal">{result.name}</td>
+                        <td className="px-4 py-2 text-charcoal-light">
                           {result.status === 'success' && 'Imported'}
                           {result.status === 'skipped' && result.error}
                           {result.status === 'error' && result.error}
@@ -755,9 +724,6 @@ export function ImportPage() {
 // Helpers
 // ===========================================================================
 
-/**
- * Parse a single CSV line, handling quoted values
- */
 function parseCSVLine(line: string): string[] {
   const values: string[] = [];
   let current = '';
@@ -768,7 +734,6 @@ function parseCSVLine(line: string): string[] {
     
     if (char === '"') {
       if (inQuotes && line[i + 1] === '"') {
-        // Escaped quote
         current += '"';
         i++;
       } else {
@@ -786,9 +751,6 @@ function parseCSVLine(line: string): string[] {
   return values;
 }
 
-/**
- * Decode QUOTED-PRINTABLE encoded string.
- */
 function decodeQuotedPrintable(input: string): string {
   let result = input.replace(/=\r?\n/g, '');
   result = result.replace(/=([0-9A-Fa-f]{2})/g, (_, hex) => {
@@ -797,18 +759,11 @@ function decodeQuotedPrintable(input: string): string {
   return result;
 }
 
-/**
- * Basic email validation
- */
 function isValidEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
-/**
- * Basic phone validation (allows various formats)
- */
 function isValidPhone(phone: string): boolean {
-  // Allow digits, spaces, dashes, parens, and + sign
   const cleaned = phone.replace(/[\s\-\(\)]/g, '');
   return /^\+?\d{7,15}$/.test(cleaned);
 }
