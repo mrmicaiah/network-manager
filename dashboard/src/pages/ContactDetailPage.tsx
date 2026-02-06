@@ -30,7 +30,9 @@ import {
   ChevronDown,
   Sparkles,
   Activity,
+  Star,
 } from 'lucide-react';
+import { MethodPicker, MethodBadge, type InteractionMethod as MethodType } from '../components/MethodPicker';
 
 // ===========================================================================
 // Types
@@ -820,6 +822,9 @@ export default function ContactDetailPage() {
                       Family
                     </span>
                   )}
+                  {contact.preferred_method && (
+                    <MethodBadge method={contact.preferred_method as MethodType} size="sm" />
+                  )}
                 </div>
               </div>
 
@@ -994,6 +999,35 @@ export default function ContactDetailPage() {
                         'Friend/Other'
                       )}
                     </span>
+                  )}
+                </div>
+
+                {/* Preferred contact method */}
+                <div>
+                  <label className="block text-sm text-charcoal-light mb-1.5">
+                    Preferred Method
+                    {isEditing && (
+                      <span className="ml-1 text-xs text-charcoal-400">
+                        (earns bonus points)
+                      </span>
+                    )}
+                  </label>
+                  {isEditing && editForm ? (
+                    <MethodPicker
+                      value={editForm.preferred_method as MethodType | null}
+                      onChange={(method) => setEditForm({ ...editForm, preferred_method: method as InteractionMethod | null })}
+                      variant="inline"
+                      showNoPreference={true}
+                      helpText="Interactions using this method earn 50 points instead of the default 25."
+                    />
+                  ) : (
+                    <div>
+                      {contact.preferred_method ? (
+                        <MethodBadge method={contact.preferred_method as MethodType} />
+                      ) : (
+                        <span className="text-sm text-charcoal-light">No preference set</span>
+                      )}
+                    </div>
                   )}
                 </div>
 
