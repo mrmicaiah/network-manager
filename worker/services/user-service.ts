@@ -11,13 +11,9 @@ import type { UserRow } from '../../shared/models';
 // Lookup
 // ---------------------------------------------------------------------------
 
-export interface UserLookupResult {
-  found: true;
-  user: UserRow;
-} | {
-  found: false;
-  user: null;
-}
+export type UserLookupResult =
+  | { found: true; user: UserRow }
+  | { found: false; user: null };
 
 /**
  * Look up a user by phone number.
