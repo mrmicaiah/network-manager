@@ -1,20 +1,29 @@
 /**
  * SMS Onboarding Service — Post-Signup Conversation State Machine
  *
- * FLOW (new as of web-first redesign):
+ * FLOW (discovery-first redesign):
  *
  *   1. User signs up on web form (email + phone)
  *   2. Bethany sends intro message via SendBlue send-message API
  *      (this registers the contact for inbound routing on SendBlue's standard plan)
  *   3. User replies → conversation begins here
- *   4. State machine walks through: intro_sent → user_replies → learn_circles →
- *      explain_features → ready
+ *   4. State machine walks through:
+ *      intro_sent → user_replies → network_discovery → path_recommendation →
+ *      guided_action → learn_circles → explain_features → ready
  *   5. On completion, user record is updated and onboarding state is archived
+ *
+ * KEY INSIGHT: A user with 1000 contacts shouldn't be asked to add them one by one.
+ * Bethany needs to understand the user's situation first, then recommend the right path.
  *
  * STATE STORAGE:
  *   Conversation state lives in a Durable Object keyed by phone number.
  *
+ * KNOWLEDGE BASE:
+ *   Comprehensive onboarding knowledge stored in R2 at bethany/knowledge/onboarding.md
+ *   Loaded and injected into system prompts for intelligent routing.
+ *
  * @see shared/models.ts for OnboardingStage, OnboardingState
+ * @see docs/bethany-onboarding-kb.md for the knowledge base source
  * @see docs/personality-config.md for Bethany's voice
  * @see worker/routes/sms.ts for routing into this service
  */
@@ -23,15 +32,27 @@ import type { Env } from '../../shared/types';
 import type { OnboardingState } from '../../shared/models';
 
 // ===========================================================================
-// Updated Stage Type
+// Updated Stage Type — Discovery-First Flow
 // ===========================================================================
 
 export type PostSignupStage =
-  | 'intro_sent'
-  | 'user_replies'
-  | 'learn_circles'
-  | 'explain_features'
-  | 'ready';
+  | 'intro_sent'           // Bethany's welcome message delivered
+  | 'user_replies'         // User responded, initial warmth
+  | 'network_discovery'    // Ask about network size, where contacts live
+  | 'path_recommendation'  // Recommend import vs manual based on answers
+  | 'guided_action'        // Walk through import OR collect names
+  | 'learn_circles'        // Identify key relationship circles
+  | 'explain_features'     // Show what Bethany can do
+  | 'ready';               // Onboarding complete
+
+// ===========================================================================
+// Detected User Signals
+// ===========================================================================
+
+export type DetectedNetworkSize = 'large' | 'medium' | 'small' | 'unknown';
+export type RecommendedPath = 'import' | 'braindump' | 'manual' | null;
+export type PhoneType = 'iphone' | 'android' | 'unknown';
+export type TechComfort = 'savvy' | 'comfortable' | 'needs_guidance' | 'unknown';
 
 // ===========================================================================
 // Onboarding State (Durable Object storage shape)
@@ -58,22 +79,33 @@ export interface OnboardingConversationState {
   startedAt: string;
   lastMessageAt: string;
   introMessageId?: string;
+
+  // Discovery signals — populated during network_discovery stage
+  detectedNetworkSize: DetectedNetworkSize;
+  recommendedPath: RecommendedPath;
+  phoneType: PhoneType;
+  techComfort: TechComfort;
+  contactsLocation: 'phone' | 'spreadsheet' | 'scattered' | 'head' | 'unknown';
+  userGoal: 'personal' | 'professional' | 'both' | 'unknown';
 }
 
 // ===========================================================================
 // Stage Transition Rules
 // ===========================================================================
 
-const VALID_TRANSITIONS: Record<PostSignupStage, PostSignupStage | null> = {
-  intro_sent: 'user_replies',
-  user_replies: 'learn_circles',
-  learn_circles: 'explain_features',
-  explain_features: 'ready',
-  ready: null,
+const VALID_TRANSITIONS: Record<PostSignupStage, PostSignupStage[]> = {
+  intro_sent: ['user_replies'],
+  user_replies: ['network_discovery'],
+  network_discovery: ['path_recommendation'],
+  path_recommendation: ['guided_action'],
+  guided_action: ['learn_circles', 'ready'], // Can skip to ready if path is clear
+  learn_circles: ['explain_features'],
+  explain_features: ['ready'],
+  ready: [],
 };
 
 export function canTransition(from: PostSignupStage, to: PostSignupStage): boolean {
-  return VALID_TRANSITIONS[from] === to;
+  return VALID_TRANSITIONS[from].includes(to);
 }
 
 // ===========================================================================
@@ -86,33 +118,102 @@ const STAGE_PROMPTS: Record<PostSignupStage, string> = {
     You're waiting for their first reply. When they respond, acknowledge them
     warmly — they took the step of signing up, that's worth something.
     
-    Your goal: Make them feel like they made a good choice. Be curious about
-    who they're here for — not in an intake-form way, in a "tell me about
-    your people" way.
+    Your goal: Make them feel like they made a good choice. Keep it brief
+    and warm. End with something that opens the conversation naturally.
     
-    After acknowledging their reply, transition naturally into asking about
-    their world. Who are the people they'd hate to lose touch with?
+    After acknowledging, you'll transition to discovery in your next message.
   `,
 
   user_replies: `
-    The user has responded to your intro. You're getting to know them.
+    The user has responded to your intro. Time to start understanding their situation.
     
-    Your goal: Understand the shape of their social world. Start identifying
-    who matters most. Listen for:
-    - Names and relationships ("my sister Emily", "old college friend Jake")
-    - Emotional weight ("I really need to call my mom more")
-    - Natural groupings that suggest circles
+    Your goal: Warm acknowledgment, then pivot to discovery. Ask an opening
+    question to understand their network:
     
-    Be a great listener here. Ask one follow-up at a time. Don't overwhelm
-    them with questions. Let the conversation breathe.
+    "Tell me about your network — who are the people you want to stay connected to?"
     
-    When you have a sense of at least 2-3 key people, naturally transition
-    to learn_circles by starting to organize what you've heard.
+    Or a variant that feels natural based on their reply. Listen for size signals.
+    
+    Keep it to one question. Let them tell you about their world.
+  `,
+
+  network_discovery: `
+    You're learning about the user's network to recommend the right import path.
+    
+    Your goal: Figure out:
+    1. Network size (hundreds vs dozens vs handful)
+    2. Where contacts live (phone, spreadsheet, scattered, in their head)
+    3. Organization level (sorted or chaos)
+    4. Their goal (personal, professional, both)
+    
+    Ask conversationally, not as a checklist. One question at a time.
+    
+    Size signals to listen for:
+    - "Thousands", "my whole phone", "years of networking" → large
+    - "Between work and personal", "maybe a hundred" → medium
+    - "Just key people", "not that many", "quality over quantity" → small
+    
+    Source signals:
+    - "All in my phone" → phone contacts
+    - "I have a spreadsheet" → organized, CSV ready
+    - "Scattered everywhere" → might need braindump
+    - "I'd have to think about it" → in their head
+    
+    When you have a sense of size + source, move to path_recommendation.
+  `,
+
+  path_recommendation: `
+    You've assessed the user's situation. Now recommend the best import path.
+    
+    PATHS TO RECOMMEND:
+    
+    1. CSV/vCard Upload (for large networks or organized users):
+       Link: {{DASHBOARD_URL}}/import
+       "Since you've got a bigger network, the fastest path is to upload..."
+    
+    2. Braindump (for scattered contacts or prose-thinkers):
+       Link: {{DASHBOARD_URL}}/braindump
+       "You don't have to organize anything. Just brain-dump everything..."
+    
+    3. Manual via Text (for small networks, <20 people):
+       "Let's start simple. Just tell me about the people who matter most..."
+    
+    4. Hybrid (for medium networks or undecided):
+       "Start with your most important 10-15 people now, import more later..."
+    
+    Give a clear recommendation based on what you learned, then offer the
+    alternative if they seem unsure. Include the relevant dashboard link
+    if recommending import or braindump.
+    
+    Adapt your pitch to their tech comfort level:
+    - Tech-savvy: Direct instructions, skip hand-holding
+    - Needs guidance: Step-by-step, reassure them
+  `,
+
+  guided_action: `
+    The user has chosen (or been recommended) a path. Help them execute it.
+    
+    IF PATH IS IMPORT/BRAINDUMP:
+    - They may have clicked the link and are doing it on dashboard
+    - Ask if they've started, offer to walk through export steps if stuck
+    - iPhone vCard: Contacts app → Lists → ••• → Export → vCard
+    - Android/Google: contacts.google.com → Menu → Export → Google CSV
+    - Be ready to troubleshoot
+    
+    IF PATH IS MANUAL:
+    - Start collecting key people one at a time
+    - "Tell me about the first person who comes to mind..."
+    - Listen for names, relationships, context
+    - Acknowledge each person warmly before asking about the next
+    
+    When they've done their initial import/dump OR you have 3-5 key people
+    for manual, transition to learn_circles to organize what you've got.
+    
+    If they seem stuck or frustrated, offer to switch paths.
   `,
 
   learn_circles: `
-    You're helping the user identify their key relationship circles.
-    You already know some people from the conversation. Now organize them.
+    Time to organize what you've learned about their network into circles.
     
     Your goal: Help the user see their relationships in groups. Start with
     what's obvious from what they've shared, then ask about gaps.
@@ -145,7 +246,12 @@ const STAGE_PROMPTS: Record<PostSignupStage, string> = {
     
     Use THEIR people as examples.
     
-    When done, transition to ready. The user is oriented and good to go.
+    Mention Dunbar layers naturally:
+    "For your inner circle — maybe 5 people — I'll nudge you weekly. For people
+    you're actively building relationships with, every couple weeks. Everyone
+    else, monthly or quarterly depending on how close you want to stay."
+    
+    When done, transition to ready.
   `,
 
   ready: `
@@ -157,10 +263,55 @@ const STAGE_PROMPTS: Record<PostSignupStage, string> = {
     End with something actionable — not a generic "let me know if you need
     anything" but a specific suggestion based on what you learned.
     
+    Example: "Alright, you're all set. I'll check in when someone's slipping
+    off your radar. In the meantime, you can text me anytime to log an
+    interaction, ask who's overdue, or add someone new. Welcome aboard."
+    
     This is the last onboarding message. After this, they're in the normal
     conversation flow.
   `,
 };
+
+// ===========================================================================
+// Knowledge Base Loading
+// ===========================================================================
+
+let cachedKnowledgeBase: string | null = null;
+
+async function loadKnowledgeBase(env: Env): Promise<string> {
+  if (cachedKnowledgeBase) {
+    return cachedKnowledgeBase;
+  }
+
+  try {
+    const r2Object = await env.STORAGE.get('bethany/knowledge/onboarding.md');
+    if (r2Object) {
+      cachedKnowledgeBase = await r2Object.text();
+      return cachedKnowledgeBase;
+    }
+  } catch (err) {
+    console.warn('[onboarding] Could not load knowledge base from R2:', err);
+  }
+
+  // Fallback: minimal inline knowledge if R2 fails
+  return `
+    # Onboarding Knowledge (Fallback)
+    
+    ## Import Paths
+    - Large network (500+): CSV upload or vCard export
+    - Medium (50-200): Flexible, recommend hybrid
+    - Small (<50): Manual via text
+    - Scattered/chaos: Braindump page
+    
+    ## URLs
+    - Import: {{DASHBOARD_URL}}/import
+    - Braindump: {{DASHBOARD_URL}}/braindump
+    
+    ## Phone Export
+    - iPhone: Contacts → Lists → ••• → Export → vCard
+    - Android: contacts.google.com → Menu → Export → Google CSV
+  `;
+}
 
 // ===========================================================================
 // Onboarding Service
@@ -196,9 +347,20 @@ export async function initializeOnboarding(
     startedAt: now,
     lastMessageAt: now,
     introMessageId: messageId,
+
+    // Discovery signals — unknown until we ask
+    detectedNetworkSize: 'unknown',
+    recommendedPath: null,
+    phoneType: 'unknown',
+    techComfort: 'unknown',
+    contactsLocation: 'unknown',
+    userGoal: 'unknown',
   };
 
   await storeOnboardingState(env, phone, state);
+
+  // Store knowledge base in R2 if not already there
+  await ensureKnowledgeBaseInR2(env);
 
   return { introMessage, messageId, state };
 }
@@ -224,6 +386,21 @@ export async function handleOnboardingMessage(
   });
   state.lastMessageAt = now;
 
+  // Analyze user message for signals during discovery stages
+  if (state.stage === 'network_discovery' || state.stage === 'user_replies') {
+    const signals = await analyzeUserSignals(env, state, body);
+    state.detectedNetworkSize = signals.networkSize;
+    state.phoneType = signals.phoneType;
+    state.techComfort = signals.techComfort;
+    state.contactsLocation = signals.contactsLocation;
+    state.userGoal = signals.userGoal;
+  }
+
+  // Determine recommended path based on signals
+  if (state.stage === 'network_discovery' && state.detectedNetworkSize !== 'unknown') {
+    state.recommendedPath = determineRecommendedPath(state);
+  }
+
   const nextStage = determineNextStage(state, body);
 
   if (nextStage && canTransition(state.stage, nextStage)) {
@@ -238,7 +415,7 @@ export async function handleOnboardingMessage(
     timestamp: new Date().toISOString(),
   });
 
-  if (state.stage === 'learn_circles' || state.stage === 'explain_features') {
+  if (state.stage === 'learn_circles' || state.stage === 'guided_action') {
     const extracted = await extractCirclesAndPeople(env, state);
     state.circlesDiscussed = extracted.circles;
     state.peopleDiscussed = extracted.people;
@@ -258,6 +435,132 @@ export async function handleOnboardingMessage(
 }
 
 // ===========================================================================
+// Signal Analysis
+// ===========================================================================
+
+interface UserSignals {
+  networkSize: DetectedNetworkSize;
+  phoneType: PhoneType;
+  techComfort: TechComfort;
+  contactsLocation: OnboardingConversationState['contactsLocation'];
+  userGoal: OnboardingConversationState['userGoal'];
+}
+
+async function analyzeUserSignals(
+  env: Env,
+  state: OnboardingConversationState,
+  latestMessage: string,
+): Promise<UserSignals> {
+  const conversationText = state.messages
+    .map(m => `${m.role === 'bethany' ? 'Bethany' : state.name}: ${m.content}`)
+    .join('\n') + `\n${state.name}: ${latestMessage}`;
+
+  const systemPrompt = `
+    Analyze this onboarding conversation and detect user signals.
+    
+    Respond ONLY with valid JSON in this exact format:
+    {
+      "networkSize": "large" | "medium" | "small" | "unknown",
+      "phoneType": "iphone" | "android" | "unknown",
+      "techComfort": "savvy" | "comfortable" | "needs_guidance" | "unknown",
+      "contactsLocation": "phone" | "spreadsheet" | "scattered" | "head" | "unknown",
+      "userGoal": "personal" | "professional" | "both" | "unknown"
+    }
+    
+    SIGNAL DETECTION RULES:
+    
+    networkSize:
+    - "large": thousands, whole phone, years of networking, sales/recruiting
+    - "medium": decent network, hundred or so, between work and personal
+    - "small": just key people, not that many, quality over quantity, starting fresh
+    
+    phoneType:
+    - "iphone": mentions iPhone, Apple, iOS
+    - "android": mentions Android, Samsung, Google, Pixel
+    
+    techComfort:
+    - "savvy": uses specific terms, asks about file formats, mentions other apps
+    - "comfortable": can follow instructions, doesn't need lots of explanation
+    - "needs_guidance": "not great with this stuff", asks what things mean, hesitant
+    
+    contactsLocation:
+    - "phone": all in phone, phone contacts
+    - "spreadsheet": have a list, spreadsheet, organized
+    - "scattered": all over, some here some there, multiple places
+    - "head": have to think about it, not written down
+    
+    userGoal:
+    - "personal": family, friends, loved ones, people I care about
+    - "professional": networking, clients, industry, professional relationships
+    - "both": mix, colleagues who became friends
+    
+    If not enough signal to determine, use "unknown". Don't guess.
+  `;
+
+  try {
+    const responseText = await callAnthropicAPI(env, systemPrompt, [
+      { role: 'user', content: conversationText },
+    ], 'claude-haiku-3-5-20241022'); // Use Haiku for signal detection
+
+    const cleaned = responseText.replace(/```json\n?|```\n?/g, '').trim();
+    const parsed = JSON.parse(cleaned);
+
+    return {
+      networkSize: parsed.networkSize || state.detectedNetworkSize,
+      phoneType: parsed.phoneType || state.phoneType,
+      techComfort: parsed.techComfort || state.techComfort,
+      contactsLocation: parsed.contactsLocation || state.contactsLocation,
+      userGoal: parsed.userGoal || state.userGoal,
+    };
+  } catch (err) {
+    console.error('[onboarding] Signal analysis failed:', err);
+    return {
+      networkSize: state.detectedNetworkSize,
+      phoneType: state.phoneType,
+      techComfort: state.techComfort,
+      contactsLocation: state.contactsLocation,
+      userGoal: state.userGoal,
+    };
+  }
+}
+
+function determineRecommendedPath(state: OnboardingConversationState): RecommendedPath {
+  const { detectedNetworkSize, contactsLocation, techComfort } = state;
+
+  // Large network → always import
+  if (detectedNetworkSize === 'large') {
+    return 'import';
+  }
+
+  // Small network → manual
+  if (detectedNetworkSize === 'small') {
+    return 'manual';
+  }
+
+  // Medium network: depends on where contacts live
+  if (detectedNetworkSize === 'medium') {
+    if (contactsLocation === 'phone' || contactsLocation === 'spreadsheet') {
+      return 'import';
+    }
+    if (contactsLocation === 'scattered' || contactsLocation === 'head') {
+      // If they need guidance, braindump is easier
+      if (techComfort === 'needs_guidance') {
+        return 'braindump';
+      }
+      // Otherwise hybrid approach
+      return 'manual'; // Start small, import later
+    }
+  }
+
+  // Scattered contacts regardless of size → braindump
+  if (contactsLocation === 'scattered') {
+    return 'braindump';
+  }
+
+  return null; // Not enough info yet
+}
+
+// ===========================================================================
 // Stage Determination
 // ===========================================================================
 
@@ -269,25 +572,57 @@ function determineNextStage(
 
   switch (state.stage) {
     case 'intro_sent':
+      // Any reply moves us forward
       return 'user_replies';
 
     case 'user_replies':
-      if (messageCount >= 2) {
+      // After initial warmth, move to discovery
+      return 'network_discovery';
+
+    case 'network_discovery':
+      // Move to recommendation when we have enough signals
+      if (state.detectedNetworkSize !== 'unknown' && state.contactsLocation !== 'unknown') {
+        return 'path_recommendation';
+      }
+      // Or after 3 exchanges in this stage
+      if (messageCount >= 4) {
+        return 'path_recommendation';
+      }
+      return null;
+
+    case 'path_recommendation':
+      // After recommending a path, move to guided action
+      return 'guided_action';
+
+    case 'guided_action':
+      // If manual path and we have some people, move to circles
+      if (state.recommendedPath === 'manual' && state.peopleDiscussed.length >= 3) {
+        return 'learn_circles';
+      }
+      // If import path and they confirm they've done it
+      const lastMsg = _userMessage.toLowerCase();
+      if (
+        (state.recommendedPath === 'import' || state.recommendedPath === 'braindump') &&
+        (lastMsg.includes('done') || lastMsg.includes('uploaded') || lastMsg.includes('finished'))
+      ) {
+        return 'learn_circles';
+      }
+      // After 5 exchanges in guided action, move on
+      if (messageCount >= 6) {
         return 'learn_circles';
       }
       return null;
 
     case 'learn_circles':
-      if (state.circlesDiscussed.length >= 2 || messageCount >= 5) {
+      // Move to features after circles are discussed
+      if (state.circlesDiscussed.length >= 2 || messageCount >= 8) {
         return 'explain_features';
       }
       return null;
 
     case 'explain_features':
-      if (messageCount >= 7) {
-        return 'ready';
-      }
-      return null;
+      // One message explaining features, then ready
+      return 'ready';
 
     case 'ready':
       return null;
@@ -327,17 +662,40 @@ async function generateBethanyResponse(
   state: OnboardingConversationState,
 ): Promise<string> {
   const stagePrompt = STAGE_PROMPTS[state.stage];
+  const knowledgeBase = await loadKnowledgeBase(env);
+  const dashboardUrl = env.DASHBOARD_URL;
+
+  // Replace {{DASHBOARD_URL}} placeholders in stage prompt and knowledge base
+  const resolvedStagePrompt = stagePrompt.replace(/\{\{DASHBOARD_URL\}\}/g, dashboardUrl);
+  const resolvedKnowledgeBase = knowledgeBase.replace(/\{\{DASHBOARD_URL\}\}/g, dashboardUrl);
 
   const systemPrompt = `
     You are Bethany — a romance novelist and relationship network manager.
     You're in the middle of an onboarding conversation with ${state.name}.
     
     Current stage: ${state.stage}
+    
+    DETECTED SIGNALS:
+    - Network size: ${state.detectedNetworkSize}
+    - Recommended path: ${state.recommendedPath || 'not yet determined'}
+    - Phone type: ${state.phoneType}
+    - Tech comfort: ${state.techComfort}
+    - Contacts location: ${state.contactsLocation}
+    - User goal: ${state.userGoal}
+    
     Circles discussed so far: ${JSON.stringify(state.circlesDiscussed)}
     People discussed so far: ${JSON.stringify(state.peopleDiscussed.map(p => p.name))}
     
     STAGE GUIDANCE:
-    ${stagePrompt}
+    ${resolvedStagePrompt}
+    
+    KNOWLEDGE BASE (reference as needed):
+    ${resolvedKnowledgeBase}
+    
+    DASHBOARD URLS:
+    - Import page: ${dashboardUrl}/import
+    - Braindump page: ${dashboardUrl}/braindump
+    - Dashboard home: ${dashboardUrl}
     
     CRITICAL RULES FOR SMS:
     - Keep responses to 2-4 sentences. This is a text conversation.
@@ -347,6 +705,7 @@ async function generateBethanyResponse(
     - Use Bethany's actual voice: warm, sharp, real.
     - Fragments are fine. Complete sentences are for emails.
     - Emojis: one max per message, many messages have none.
+    - When sharing links, keep them clean — no markdown formatting.
     
     Respond ONLY with Bethany's next message. No metadata, no stage markers,
     no explanatory text. Just her words.
@@ -403,7 +762,7 @@ async function extractCirclesAndPeople(
   }];
 
   try {
-    const responseText = await callAnthropicAPI(env, systemPrompt, messages);
+    const responseText = await callAnthropicAPI(env, systemPrompt, messages, 'claude-haiku-3-5-20241022');
     const cleaned = responseText.replace(/```json\n?|```\n?/g, '').trim();
     const parsed = JSON.parse(cleaned);
 
@@ -478,8 +837,31 @@ async function finalizeOnboarding(
 
   console.log(
     `[onboarding] Finalized for ${state.name} (${state.phone}). ` +
+    `Path: ${state.recommendedPath}, Size: ${state.detectedNetworkSize}, ` +
     `Circles: ${state.circlesDiscussed.length}, People: ${state.peopleDiscussed.length}`
   );
+}
+
+// ===========================================================================
+// Knowledge Base Initialization
+// ===========================================================================
+
+async function ensureKnowledgeBaseInR2(env: Env): Promise<void> {
+  const key = 'bethany/knowledge/onboarding.md';
+
+  try {
+    const existing = await env.STORAGE.head(key);
+    if (existing) {
+      return; // Already exists
+    }
+  } catch {
+    // Key doesn't exist, we'll create it
+  }
+
+  // Fetch from GitHub or use embedded fallback
+  // For now, the knowledge base should be uploaded via a separate deploy step
+  // See docs/bethany-onboarding-kb.md
+  console.log('[onboarding] Knowledge base not found in R2. Using embedded fallback.');
 }
 
 // ===========================================================================
@@ -532,6 +914,12 @@ async function reconstructState(
     messages: [],
     startedAt: now,
     lastMessageAt: now,
+    detectedNetworkSize: 'unknown',
+    recommendedPath: null,
+    phoneType: 'unknown',
+    techComfort: 'unknown',
+    contactsLocation: 'unknown',
+    userGoal: 'unknown',
   };
 }
 
@@ -576,6 +964,7 @@ async function callAnthropicAPI(
   env: Env,
   systemPrompt: string,
   messages: Array<{ role: 'user' | 'assistant'; content: string }>,
+  model: string = 'claude-sonnet-4-5-20250929',
 ): Promise<string> {
   const response = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -585,7 +974,7 @@ async function callAnthropicAPI(
       'anthropic-version': '2023-06-01',
     },
     body: JSON.stringify({
-      model: 'claude-sonnet-4-5-20250929',
+      model,
       max_tokens: 300,
       system: systemPrompt,
       messages: messages.length > 0 ? messages : [
