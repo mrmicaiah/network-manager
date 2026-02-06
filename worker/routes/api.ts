@@ -71,6 +71,7 @@ import {
   createPortalSession,
   handleWebhook,
 } from '../services/stripe-service';
+import { parseBraindump } from '../services/braindump-service';
 import type {
   CreateContactInput,
   UpdateContactInput,
@@ -520,6 +521,12 @@ async function handleListInteractions(
 // Braindump Handler
 // ===========================================================================
 
+/**
+ * Parse free-form text about contacts into structured data.
+ *
+ * Uses Claude Haiku for cost-efficient AI parsing.
+ * Returns contacts, interactions, and unresolved fragments.
+ */
 async function handleBraindumpParse(
   request: Request,
   env: Env,
@@ -531,9 +538,22 @@ async function handleBraindumpParse(
     return errorResponse('Text content is required', 400);
   }
 
-  // TODO: TASK — Implement braindump parsing with Claude API
-  // For now, return a placeholder that signals the structure
-  return errorResponse('Braindump parsing not yet implemented', 501);
+  // TODO: Check usage limits for free tier users
+  // const usage = await getUsageTracking(db, userId);
+  // if (user.subscription_tier === 'free' && usage.braindumps_processed >= FREE_TIER_LIMITS.max_braindumps_per_day) {
+  //   return errorResponse('Daily braindump limit reached. Upgrade to premium for unlimited.', 429);
+  // }
+
+  const result = await parseBraindump(env, body.text);
+
+  if (!result.success) {
+    return errorResponse(result.error, 400);
+  }
+
+  // TODO: Increment usage tracking
+  // await incrementUsage(db, userId, 'braindumps_processed');
+
+  return jsonResponse({ data: result.data });
 }
 
 // ===========================================================================
