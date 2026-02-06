@@ -63,18 +63,18 @@ const INTENT_LABELS: Record<IntentType, string> = {
 };
 
 const INTENT_COLORS: Record<IntentType, string> = {
-  inner_circle: 'bg-violet-100 text-violet-700',
+  inner_circle: 'bg-bethany-100 text-bethany-700',
   nurture: 'bg-blue-100 text-blue-700',
-  maintain: 'bg-cyan-100 text-cyan-700',
-  transactional: 'bg-lime-100 text-lime-700',
-  dormant: 'bg-gray-100 text-gray-600',
-  new: 'bg-orange-100 text-orange-700',
+  maintain: 'bg-sage-100 text-sage-700',
+  transactional: 'bg-charcoal-100 text-charcoal-600',
+  dormant: 'bg-charcoal-100 text-charcoal-500',
+  new: 'bg-golden-100 text-golden-600',
 };
 
 const CONFIDENCE_STYLES: Record<string, string> = {
-  high: 'border-l-green-400',
-  medium: 'border-l-yellow-400',
-  low: 'border-l-orange-400',
+  high: 'border-l-sage-400',
+  medium: 'border-l-golden-400',
+  low: 'border-l-bethany-400',
 };
 
 const PLACEHOLDER_TEXT = `Sarah Chen - college roommate, lives in Denver now, works at Google. We should catch up monthly. Last talked about 3 weeks ago about her new job.
@@ -139,7 +139,6 @@ export function BraindumpPage() {
     setViewState('saving');
 
     try {
-      // Create contacts one by one (could batch this if the API supports it)
       for (const contact of activeContacts) {
         await saveContacts('/api/contacts', {
           method: 'POST',
@@ -151,7 +150,6 @@ export function BraindumpPage() {
             intent: contact.suggested_intent ?? 'new',
             notes: contact.notes,
             source: 'braindump',
-            // Note: circle linking would need additional API support
           }),
         });
       }
@@ -182,8 +180,8 @@ export function BraindumpPage() {
     <div className="max-w-3xl mx-auto">
       {/* Header */}
       <div className="mb-6">
-        <h1 className="text-2xl font-semibold text-gray-900 mb-2">Braindump</h1>
-        <p className="text-gray-500">
+        <h1 className="font-display text-2xl font-medium text-charcoal mb-2">Braindump</h1>
+        <p className="text-charcoal-light">
           Tell me about your contacts. Names, how you know them, what circle they belong to.
           I'll sort it out.
         </p>
@@ -191,23 +189,23 @@ export function BraindumpPage() {
 
       {/* Input State */}
       {viewState === 'input' && (
-        <div className="bg-white rounded-xl border border-gray-200 shadow-sm">
+        <div className="card !p-0 overflow-hidden">
           <textarea
             value={text}
             onChange={(e) => setText(e.target.value)}
             placeholder={PLACEHOLDER_TEXT}
-            className="w-full h-80 p-5 rounded-t-xl resize-none focus:outline-none text-gray-900 placeholder:text-gray-400"
+            className="w-full h-80 p-5 rounded-t-2xl resize-none focus:outline-none text-charcoal placeholder:text-charcoal-400 bg-warm-white"
             autoFocus
           />
-          <div className="px-5 py-4 border-t border-gray-200 flex items-center justify-between bg-gray-50 rounded-b-xl">
-            <p className="text-sm text-gray-500 flex items-center gap-2">
+          <div className="px-5 py-4 border-t border-cream-dark flex items-center justify-between bg-cream rounded-b-2xl">
+            <p className="text-sm text-charcoal-light flex items-center gap-2">
               <Brain className="w-4 h-4 text-bethany-500" />
               I'll extract contacts, relationships, and notes automatically
             </p>
             <button
               onClick={handleSubmit}
               disabled={!text.trim()}
-              className="px-5 py-2.5 bg-bethany-500 text-white font-medium rounded-lg hover:bg-bethany-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+              className="btn-primary"
             >
               <Sparkles className="w-4 h-4" />
               Process
@@ -218,12 +216,12 @@ export function BraindumpPage() {
 
       {/* Loading State */}
       {viewState === 'loading' && (
-        <div className="bg-white rounded-xl border border-gray-200 p-12 text-center">
+        <div className="card text-center">
           <div className="w-16 h-16 bg-bethany-50 rounded-full flex items-center justify-center mx-auto mb-4">
             <Loader2 className="w-8 h-8 text-bethany-500 animate-spin" />
           </div>
-          <h2 className="text-lg font-medium text-gray-900 mb-2">Processing your braindump...</h2>
-          <p className="text-gray-500 max-w-sm mx-auto">
+          <h2 className="text-lg font-medium text-charcoal mb-2">Processing your braindump...</h2>
+          <p className="text-charcoal-light max-w-sm mx-auto">
             I'm reading through everything and extracting the contacts, circles, and notes.
           </p>
         </div>
@@ -236,12 +234,12 @@ export function BraindumpPage() {
           <div className="flex items-center justify-between">
             <button
               onClick={handleReset}
-              className="text-gray-500 hover:text-gray-700 flex items-center gap-1 text-sm"
+              className="text-charcoal-light hover:text-charcoal flex items-center gap-1 text-sm"
             >
               <ArrowLeft className="w-4 h-4" />
               Start over
             </button>
-            <p className="text-sm text-gray-500">
+            <p className="text-sm text-charcoal-light">
               Found {result.contacts.length} contact{result.contacts.length !== 1 ? 's' : ''}
               {dismissedIndices.size > 0 && ` (${activeContacts.length} selected)`}
             </p>
@@ -260,8 +258,8 @@ export function BraindumpPage() {
               ))}
             </div>
           ) : (
-            <div className="bg-white rounded-xl border border-gray-200 p-8 text-center">
-              <p className="text-gray-500">
+            <div className="card text-center">
+              <p className="text-charcoal-light">
                 I couldn't find any contacts in that text. Try adding more details like names
                 and how you know them.
               </p>
@@ -270,11 +268,11 @@ export function BraindumpPage() {
 
           {/* Unresolved items */}
           {result.unresolved.length > 0 && (
-            <div className="bg-orange-50 rounded-xl border border-orange-200 p-4">
-              <p className="text-sm font-medium text-orange-800 mb-2">
+            <div className="bg-golden-50 rounded-2xl border border-golden-200 p-4">
+              <p className="text-sm font-medium text-golden-800 mb-2">
                 Couldn't parse these parts:
               </p>
-              <ul className="text-sm text-orange-700 space-y-1">
+              <ul className="text-sm text-golden-700 space-y-1">
                 {result.unresolved.map((item, i) => (
                   <li key={i} className="truncate">
                     • {item}
@@ -286,18 +284,18 @@ export function BraindumpPage() {
 
           {/* Save action */}
           {activeContacts.length > 0 && (
-            <div className="bg-white rounded-xl border border-gray-200 p-4 flex items-center justify-between">
+            <div className="card flex items-center justify-between">
               <div>
-                <p className="font-medium text-gray-900">
+                <p className="font-medium text-charcoal">
                   Add {activeContacts.length} contact{activeContacts.length !== 1 ? 's' : ''}?
                 </p>
-                <p className="text-sm text-gray-500">
+                <p className="text-sm text-charcoal-light">
                   You can edit details later from the contacts page
                 </p>
               </div>
               <button
                 onClick={handleSaveAll}
-                className="px-5 py-2.5 bg-bethany-500 text-white font-medium rounded-lg hover:bg-bethany-600 transition-colors flex items-center gap-2"
+                className="btn-primary"
               >
                 <Check className="w-4 h-4" />
                 Save All
@@ -309,37 +307,37 @@ export function BraindumpPage() {
 
       {/* Saving State */}
       {viewState === 'saving' && (
-        <div className="bg-white rounded-xl border border-gray-200 p-12 text-center">
+        <div className="card text-center">
           <div className="w-16 h-16 bg-bethany-50 rounded-full flex items-center justify-center mx-auto mb-4">
             <Loader2 className="w-8 h-8 text-bethany-500 animate-spin" />
           </div>
-          <h2 className="text-lg font-medium text-gray-900 mb-2">Saving contacts...</h2>
-          <p className="text-gray-500">Adding {activeContacts.length} contacts to your network</p>
+          <h2 className="text-lg font-medium text-charcoal mb-2">Saving contacts...</h2>
+          <p className="text-charcoal-light">Adding {activeContacts.length} contacts to your network</p>
         </div>
       )}
 
       {/* Success State */}
       {viewState === 'success' && (
-        <div className="bg-white rounded-xl border border-gray-200 p-12 text-center">
-          <div className="w-16 h-16 bg-green-50 rounded-full flex items-center justify-center mx-auto mb-4">
-            <Check className="w-8 h-8 text-green-500" />
+        <div className="card text-center">
+          <div className="w-16 h-16 bg-sage-50 rounded-full flex items-center justify-center mx-auto mb-4">
+            <Check className="w-8 h-8 text-sage-500" />
           </div>
-          <h2 className="text-lg font-medium text-gray-900 mb-2">Contacts added!</h2>
-          <p className="text-gray-500 max-w-sm mx-auto mb-6">
+          <h2 className="text-lg font-medium text-charcoal mb-2">Contacts added!</h2>
+          <p className="text-charcoal-light max-w-sm mx-auto mb-6">
             Your contacts are now in the system. You can set up circles and adjust details
             from the contacts page.
           </p>
           <div className="flex items-center justify-center gap-3">
             <button
               onClick={handleReset}
-              className="px-5 py-2.5 bg-bethany-500 text-white font-medium rounded-lg hover:bg-bethany-600 transition-colors flex items-center gap-2"
+              className="btn-primary"
             >
               <UserPlus className="w-4 h-4" />
               Add More
             </button>
             <a
               href="/contacts"
-              className="px-5 py-2.5 border border-gray-300 text-gray-700 font-medium rounded-lg hover:bg-gray-50 transition-colors"
+              className="btn-secondary"
             >
               View Contacts
             </a>
@@ -349,17 +347,17 @@ export function BraindumpPage() {
 
       {/* Error State */}
       {viewState === 'error' && (
-        <div className="bg-white rounded-xl border border-red-200 p-12 text-center">
+        <div className="card border-red-200 text-center">
           <div className="w-16 h-16 bg-red-50 rounded-full flex items-center justify-center mx-auto mb-4">
             <AlertCircle className="w-8 h-8 text-red-500" />
           </div>
-          <h2 className="text-lg font-medium text-gray-900 mb-2">Something went wrong</h2>
-          <p className="text-gray-500 max-w-sm mx-auto mb-6">
+          <h2 className="text-lg font-medium text-charcoal mb-2">Something went wrong</h2>
+          <p className="text-charcoal-light max-w-sm mx-auto mb-6">
             {errorMessage || 'An unexpected error occurred. Please try again.'}
           </p>
           <button
             onClick={handleRetry}
-            className="px-5 py-2.5 bg-bethany-500 text-white font-medium rounded-lg hover:bg-bethany-600 transition-colors"
+            className="btn-primary"
           >
             Try Again
           </button>
@@ -384,10 +382,10 @@ function ContactCard({
 }) {
   if (isDismissed) {
     return (
-      <div className="bg-gray-50 rounded-xl border border-gray-200 p-4 opacity-50">
+      <div className="bg-cream-dark rounded-2xl border border-cream-dark p-4 opacity-50">
         <div className="flex items-center justify-between">
-          <p className="text-gray-500 line-through">{contact.name}</p>
-          <span className="text-sm text-gray-400">Dismissed</span>
+          <p className="text-charcoal-light line-through">{contact.name}</p>
+          <span className="text-sm text-charcoal-400">Dismissed</span>
         </div>
       </div>
     );
@@ -402,7 +400,7 @@ function ContactCard({
 
   return (
     <div
-      className={`bg-white rounded-xl border border-gray-200 p-4 border-l-4 ${
+      className={`bg-warm-white rounded-2xl border border-cream-dark p-4 border-l-4 shadow-soft ${
         CONFIDENCE_STYLES[contact.confidence]
       }`}
     >
@@ -410,7 +408,7 @@ function ContactCard({
         <div className="flex-1 min-w-0">
           {/* Name and intent */}
           <div className="flex items-center gap-2 flex-wrap mb-2">
-            <h3 className="font-medium text-gray-900">{contact.name}</h3>
+            <h3 className="font-medium text-charcoal">{contact.name}</h3>
             {intentLabel && (
               <span
                 className={`px-2 py-0.5 text-xs font-medium rounded-full ${intentColor}`}
@@ -422,7 +420,7 @@ function ContactCard({
 
           {/* Contact info */}
           {(contact.phone || contact.email) && (
-            <p className="text-sm text-gray-500 mb-2">
+            <p className="text-sm text-charcoal-light mb-2">
               {[contact.phone, contact.email].filter(Boolean).join(' • ')}
             </p>
           )}
@@ -433,7 +431,7 @@ function ContactCard({
               {contact.suggested_circles.map((circle, i) => (
                 <span
                   key={i}
-                  className="px-2 py-0.5 bg-gray-100 text-gray-600 text-xs rounded-full"
+                  className="px-2 py-0.5 bg-cream-dark text-charcoal-600 text-xs rounded-full"
                 >
                   {circle}
                 </span>
@@ -443,11 +441,11 @@ function ContactCard({
 
           {/* Notes */}
           {contact.notes && (
-            <p className="text-sm text-gray-600 mt-2 italic">"{contact.notes}"</p>
+            <p className="text-sm text-charcoal-light mt-2 italic">"{contact.notes}"</p>
           )}
 
           {/* Confidence indicator */}
-          <p className="text-xs text-gray-400 mt-2 capitalize">
+          <p className="text-xs text-charcoal-400 mt-2 capitalize">
             {contact.confidence} confidence
           </p>
         </div>
@@ -455,7 +453,7 @@ function ContactCard({
         {/* Dismiss button */}
         <button
           onClick={onDismiss}
-          className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors flex-shrink-0"
+          className="p-1.5 text-charcoal-400 hover:text-charcoal-600 hover:bg-cream-dark rounded-xl transition-colors flex-shrink-0"
           title="Don't add this contact"
         >
           <X className="w-4 h-4" />
