@@ -23,7 +23,8 @@ import { handleScheduled } from './cron/scheduled';
 export { OnboardingDO } from './services/onboarding-service';
 export { UserDiscoveryDO } from './services/user-discovery-service';
 export { NudgeContextDO } from './services/nudge-conversation-flow';
-export { IntentSortingDO } from './services/intent-assignment-flow';
+// Rename IntentContextDO -> IntentSortingDO for wrangler.toml compatibility
+export { IntentContextDO as IntentSortingDO } from './services/intent-assignment-flow';
 
 const VERSION = {
   version: '0.10.0',
