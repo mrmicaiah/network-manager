@@ -1,5 +1,5 @@
 import { useState, useMemo, useCallback, useEffect, Fragment } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useApi, useLazyApi } from '../hooks/useApi';
 import { ExportModal } from '../components/ExportModal';
 import {
@@ -34,6 +34,7 @@ import {
   Sparkles,
   ChevronRight,
   MoreHorizontal,
+  Eye,
 } from 'lucide-react';
 
 // ===========================================================================
@@ -210,20 +211,29 @@ function ContactCard({
   onDelete,
   onLogInteraction,
 }: ContactCardProps) {
+  const navigate = useNavigate();
   const [showActions, setShowActions] = useState(false);
   const isArchived = contact.archived === 1;
 
+  const handleCardClick = () => {
+    navigate(`/contacts/${contact.id}`);
+  };
+
   return (
     <div
+      onClick={handleCardClick}
       className={`
-        relative bg-warm-white rounded-2xl border transition-all duration-200 shadow-soft
-        ${selected ? 'border-bethany-500 ring-2 ring-bethany-100' : 'border-cream-dark hover:border-charcoal-300'}
+        relative bg-warm-white rounded-2xl border transition-all duration-200 shadow-soft cursor-pointer
+        ${selected ? 'border-bethany-500 ring-2 ring-bethany-100' : 'border-cream-dark hover:border-charcoal-300 hover:shadow-medium'}
         ${isArchived ? 'opacity-60' : ''}
       `}
     >
       {/* Selection checkbox */}
       <button
-        onClick={() => onSelect(contact.id)}
+        onClick={(e) => {
+          e.stopPropagation();
+          onSelect(contact.id);
+        }}
         className="absolute top-4 left-4 z-10"
       >
         {selected ? (
@@ -261,7 +271,10 @@ function ContactCard({
           {/* Actions menu */}
           <div className="relative">
             <button
-              onClick={() => setShowActions(!showActions)}
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowActions(!showActions);
+              }}
               className="p-1.5 text-charcoal-400 hover:text-charcoal-600 hover:bg-cream-dark rounded-xl transition-colors"
             >
               <MoreHorizontal className="w-5 h-5" />
@@ -271,11 +284,26 @@ function ContactCard({
               <>
                 <div
                   className="fixed inset-0 z-20"
-                  onClick={() => setShowActions(false)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowActions(false);
+                  }}
                 />
                 <div className="absolute right-0 top-full mt-1 z-30 w-48 bg-warm-white rounded-xl shadow-medium border border-cream-dark py-1">
                   <button
-                    onClick={() => {
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      navigate(`/contacts/${contact.id}`);
+                      setShowActions(false);
+                    }}
+                    className="w-full px-4 py-2 text-left text-sm text-charcoal hover:bg-cream-dark flex items-center gap-2"
+                  >
+                    <Eye className="w-4 h-4" />
+                    View details
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
                       onEdit(contact);
                       setShowActions(false);
                     }}
@@ -285,7 +313,8 @@ function ContactCard({
                     Edit details
                   </button>
                   <button
-                    onClick={() => {
+                    onClick={(e) => {
+                      e.stopPropagation();
                       onLogInteraction(contact);
                       setShowActions(false);
                     }}
@@ -297,7 +326,8 @@ function ContactCard({
                   <hr className="my-1 border-cream-dark" />
                   {isArchived ? (
                     <button
-                      onClick={() => {
+                      onClick={(e) => {
+                        e.stopPropagation();
                         onRestore(contact);
                         setShowActions(false);
                       }}
@@ -308,7 +338,8 @@ function ContactCard({
                     </button>
                   ) : (
                     <button
-                      onClick={() => {
+                      onClick={(e) => {
+                        e.stopPropagation();
                         onArchive(contact);
                         setShowActions(false);
                       }}
@@ -319,7 +350,8 @@ function ContactCard({
                     </button>
                   )}
                   <button
-                    onClick={() => {
+                    onClick={(e) => {
+                      e.stopPropagation();
                       onDelete(contact);
                       setShowActions(false);
                     }}
