@@ -1,4 +1,4 @@
-name = "bethany-network-manager"
+name = "network-manager"
 main = "worker/index.ts"
 compatibility_date = "2025-01-01"
 compatibility_flags = ["nodejs_compat"]
@@ -6,13 +6,13 @@ compatibility_flags = ["nodejs_compat"]
 # D1 Database — contact graph, users, interactions
 [[d1_databases]]
 binding = "DB"
-database_name = "bethany-network-db"
-# database_id = "" # Set after: wrangler d1 create bethany-network-db
+database_name = "network-manager-db"
+database_id = "c9432a3a-f521-4b41-99f8-b347b3c90bb0"
 
 # R2 for bulk imports, exports, backups
 [[r2_buckets]]
 binding = "STORAGE"
-bucket_name = "bethany-network-storage"
+bucket_name = "network-manager-storage"
 
 # ===========================================================================
 # Durable Objects — Conversation State Management
