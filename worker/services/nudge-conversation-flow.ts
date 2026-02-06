@@ -56,7 +56,7 @@ import type { UserRow, ContactRow, IntentType } from '../../shared/models';
 import type { ContactNeedingAttention } from './nudge-service';
 import { getContactsNeedingAttention } from './nudge-service';
 import { INTENT_CONFIGS } from '../../shared/intent-config';
-import { generateSmsLink } from '../utils/deep-links';
+import { generateSmsDeepLink } from '../utils/deep-links';
 
 // ===========================================================================
 // Types
@@ -616,7 +616,7 @@ Respond ONLY with the draft message text. No quotes, no explanation.`;
   // Generate deep link if phone number available
   let deepLink: string | undefined;
   if (contact.phone) {
-    deepLink = generateSmsLink(contact.phone, draftMessage);
+    deepLink = generateSmsDeepLink(contact.phone, draftMessage);
   }
 
   // Build Bethany's response
@@ -681,7 +681,7 @@ Keep it under 50 characters. Sound natural. Respond only with the message text.`
 
   let deepLink: string | undefined;
   if (contact.phone) {
-    deepLink = generateSmsLink(contact.phone, draftMessage);
+    deepLink = generateSmsDeepLink(contact.phone, draftMessage);
   }
 
   return { message: draftMessage, deepLink };
