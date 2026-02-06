@@ -396,7 +396,7 @@ export function SettingsPage() {
 
   return (
     <div className="max-w-2xl mx-auto space-y-4 pb-8">
-      <h1 className="text-2xl font-semibold text-gray-900">Settings</h1>
+      <h1 className="font-display text-2xl font-medium text-charcoal">Settings</h1>
 
       {/* Subscription Card */}
       <CollapsibleSection
@@ -405,7 +405,7 @@ export function SettingsPage() {
         isExpanded={expandedSections.has('subscription')}
         onToggle={() => toggleSection('subscription')}
         badge={subscription?.isPremium ? (
-          <span className="px-2 py-1 bg-violet-100 text-violet-700 text-xs font-medium rounded-full flex items-center gap-1">
+          <span className="badge-primary flex items-center gap-1">
             <Crown className="w-3 h-3" />
             Premium
           </span>
@@ -415,17 +415,17 @@ export function SettingsPage() {
           {/* Status display */}
           {subscription?.isPremium ? (
             <div className="flex items-start gap-4">
-              <div className="w-12 h-12 bg-violet-100 rounded-xl flex items-center justify-center">
-                <Crown className="w-6 h-6 text-violet-600" />
+              <div className="w-12 h-12 bg-bethany-100 rounded-xl flex items-center justify-center">
+                <Crown className="w-6 h-6 text-bethany-600" />
               </div>
               <div className="flex-1">
-                <p className="font-medium text-gray-900">Premium Plan</p>
-                <p className="text-sm text-gray-500 mt-1">
+                <p className="font-medium text-charcoal">Premium Plan</p>
+                <p className="text-sm text-charcoal-light mt-1">
                   Unlimited contacts, messages, and all premium features
                 </p>
                 <button
                   onClick={handleManageSubscription}
-                  className="mt-3 text-sm text-bethany-600 hover:text-bethany-700 font-medium"
+                  className="mt-3 text-sm text-bethany-500 hover:text-bethany-600 font-medium transition-colors"
                 >
                   Manage subscription →
                 </button>
@@ -433,23 +433,23 @@ export function SettingsPage() {
             </div>
           ) : subscription?.isTrialActive ? (
             <div className="flex items-start gap-4">
-              <div className="w-12 h-12 bg-blue-100 rounded-xl flex items-center justify-center">
-                <Clock className="w-6 h-6 text-blue-600" />
+              <div className="w-12 h-12 bg-golden-100 rounded-xl flex items-center justify-center">
+                <Clock className="w-6 h-6 text-golden-500" />
               </div>
               <div className="flex-1">
                 <div className="flex items-center gap-2">
-                  <p className="font-medium text-gray-900">Trial</p>
-                  <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-xs font-medium rounded-full">
+                  <p className="font-medium text-charcoal">Trial</p>
+                  <span className="badge-warning">
                     {trialDaysLeft} days left
                   </span>
                 </div>
-                <p className="text-sm text-gray-500 mt-1">
+                <p className="text-sm text-charcoal-light mt-1">
                   Full access to all features during your trial
                 </p>
                 <div className="mt-3">
-                  <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+                  <div className="h-2 bg-cream-dark rounded-full overflow-hidden">
                     <div
-                      className="h-full bg-blue-500"
+                      className="h-full bg-golden-400 transition-all"
                       style={{ width: `${Math.max(0, 100 - (trialDaysLeft ?? 0) * (100 / 14))}%` }}
                     />
                   </div>
@@ -458,12 +458,12 @@ export function SettingsPage() {
             </div>
           ) : (
             <div className="flex items-start gap-4">
-              <div className="w-12 h-12 bg-gray-100 rounded-xl flex items-center justify-center">
-                <Zap className="w-6 h-6 text-gray-600" />
+              <div className="w-12 h-12 bg-cream-dark rounded-xl flex items-center justify-center">
+                <Zap className="w-6 h-6 text-charcoal-light" />
               </div>
               <div>
-                <p className="font-medium text-gray-900">Free Plan</p>
-                <p className="text-sm text-gray-500 mt-1">
+                <p className="font-medium text-charcoal">Free Plan</p>
+                <p className="text-sm text-charcoal-light mt-1">
                   Limited to {FREE_TIER_LIMITS.max_contacts} contacts and {FREE_TIER_LIMITS.max_messages_per_day} messages/day
                 </p>
               </div>
@@ -474,7 +474,7 @@ export function SettingsPage() {
           {!subscription?.isPremium && (
             <button
               onClick={handleUpgrade}
-              className="mt-4 w-full px-4 py-3 bg-gradient-to-r from-bethany-500 to-violet-500 text-white font-medium rounded-lg hover:from-bethany-600 hover:to-violet-600 transition-all flex items-center justify-center gap-2"
+              className="mt-4 w-full btn-primary"
             >
               <Sparkles className="w-4 h-4" />
               Upgrade to Premium
@@ -483,15 +483,15 @@ export function SettingsPage() {
 
           {/* Feature Comparison */}
           {!subscription?.isPremium && (
-            <div className="mt-6 border-t border-gray-200 pt-4">
-              <p className="text-sm font-medium text-gray-700 mb-3">Compare plans</p>
+            <div className="mt-6 border-t border-cream-dark pt-4">
+              <p className="text-sm font-medium text-charcoal mb-3">Compare plans</p>
               <div className="space-y-2">
                 {FEATURE_COMPARISON.map(({ feature, free, premium }) => (
                   <div key={feature} className="flex items-center justify-between text-sm">
-                    <span className="text-gray-600">{feature}</span>
+                    <span className="text-charcoal-light">{feature}</span>
                     <div className="flex gap-8">
-                      <span className="w-16 text-right text-gray-500">{free}</span>
-                      <span className="w-16 text-right text-violet-600 font-medium">{premium}</span>
+                      <span className="w-16 text-right text-charcoal-light">{free}</span>
+                      <span className="w-16 text-right text-bethany-500 font-medium">{premium}</span>
                     </div>
                   </div>
                 ))}
@@ -541,19 +541,19 @@ export function SettingsPage() {
       >
         <div className="p-5 space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label className="block text-sm font-medium text-charcoal mb-1">
               Name
             </label>
             <input
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-bethany-500 focus:border-transparent outline-none"
+              className="input-field"
             />
           </div>
           
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label className="block text-sm font-medium text-charcoal mb-1">
               Email
             </label>
             <input
@@ -561,40 +561,40 @@ export function SettingsPage() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="your@email.com"
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-bethany-500 focus:border-transparent outline-none"
+              className="input-field"
             />
           </div>
           
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label className="block text-sm font-medium text-charcoal mb-1">
               Phone
             </label>
             <input
               type="tel"
               value={user?.phone || ''}
               disabled
-              className="w-full px-4 py-2 border border-gray-200 rounded-lg bg-gray-50 text-gray-500"
+              className="input-field"
             />
-            <p className="text-xs text-gray-500 mt-1">
+            <p className="text-xs text-charcoal-light mt-1">
               Phone number cannot be changed
             </p>
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label className="block text-sm font-medium text-charcoal mb-1">
               Gender preference
             </label>
-            <p className="text-xs text-gray-500 mb-2">
+            <p className="text-xs text-charcoal-light mb-2">
               Research shows women prefer conversation-based nudges while men prefer activity-based ones
             </p>
             <div className="flex gap-2">
               <button
                 type="button"
                 onClick={() => setGender(null)}
-                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors ${
                   gender === null
-                    ? 'bg-bethany-100 text-bethany-700 border-2 border-bethany-500'
-                    : 'bg-gray-100 text-gray-700 border-2 border-transparent hover:bg-gray-200'
+                    ? 'bg-bethany-100 text-bethany-600 border-2 border-bethany-500'
+                    : 'bg-cream-dark text-charcoal-light border-2 border-transparent hover:bg-cream'
                 }`}
               >
                 Not set
@@ -602,10 +602,10 @@ export function SettingsPage() {
               <button
                 type="button"
                 onClick={() => setGender('female')}
-                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors ${
                   gender === 'female'
-                    ? 'bg-bethany-100 text-bethany-700 border-2 border-bethany-500'
-                    : 'bg-gray-100 text-gray-700 border-2 border-transparent hover:bg-gray-200'
+                    ? 'bg-bethany-100 text-bethany-600 border-2 border-bethany-500'
+                    : 'bg-cream-dark text-charcoal-light border-2 border-transparent hover:bg-cream'
                 }`}
               >
                 Female
@@ -613,10 +613,10 @@ export function SettingsPage() {
               <button
                 type="button"
                 onClick={() => setGender('male')}
-                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors ${
                   gender === 'male'
-                    ? 'bg-bethany-100 text-bethany-700 border-2 border-bethany-500'
-                    : 'bg-gray-100 text-gray-700 border-2 border-transparent hover:bg-gray-200'
+                    ? 'bg-bethany-100 text-bethany-600 border-2 border-bethany-500'
+                    : 'bg-cream-dark text-charcoal-light border-2 border-transparent hover:bg-cream'
                 }`}
               >
                 Male
@@ -626,9 +626,9 @@ export function SettingsPage() {
 
           {profileMessage && (
             <div
-              className={`p-3 rounded-lg text-sm flex items-center gap-2 ${
+              className={`p-3 rounded-xl text-sm flex items-center gap-2 ${
                 profileMessage.type === 'success'
-                  ? 'bg-green-50 text-green-700'
+                  ? 'bg-sage-50 text-sage-700'
                   : 'bg-red-50 text-red-700'
               }`}
             >
@@ -644,7 +644,7 @@ export function SettingsPage() {
           <button
             onClick={handleSaveProfile}
             disabled={isSavingProfile || (!name.trim())}
-            className="px-4 py-2 bg-bethany-500 text-white font-medium rounded-lg hover:bg-bethany-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+            className="btn-primary"
           >
             {isSavingProfile ? (
               <>
@@ -667,7 +667,7 @@ export function SettingsPage() {
       >
         <div className="p-5 space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label className="block text-sm font-medium text-charcoal mb-1">
               Nudge frequency
             </label>
             <div className="flex gap-2">
@@ -675,10 +675,10 @@ export function SettingsPage() {
                 type="button"
                 onClick={() => setNudgeFrequency('daily')}
                 disabled={subscription?.tier === 'free'}
-                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors ${
                   nudgeFrequency === 'daily'
-                    ? 'bg-bethany-100 text-bethany-700 border-2 border-bethany-500'
-                    : 'bg-gray-100 text-gray-700 border-2 border-transparent hover:bg-gray-200'
+                    ? 'bg-bethany-100 text-bethany-600 border-2 border-bethany-500'
+                    : 'bg-cream-dark text-charcoal-light border-2 border-transparent hover:bg-cream'
                 } ${subscription?.tier === 'free' ? 'opacity-50 cursor-not-allowed' : ''}`}
               >
                 Daily {subscription?.tier === 'free' && '(Premium)'}
@@ -686,10 +686,10 @@ export function SettingsPage() {
               <button
                 type="button"
                 onClick={() => setNudgeFrequency('weekly')}
-                className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors ${
                   nudgeFrequency === 'weekly'
-                    ? 'bg-bethany-100 text-bethany-700 border-2 border-bethany-500'
-                    : 'bg-gray-100 text-gray-700 border-2 border-transparent hover:bg-gray-200'
+                    ? 'bg-bethany-100 text-bethany-600 border-2 border-bethany-500'
+                    : 'bg-cream-dark text-charcoal-light border-2 border-transparent hover:bg-cream'
                 }`}
               >
                 Weekly
@@ -698,28 +698,28 @@ export function SettingsPage() {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-2">
-              <Moon className="w-4 h-4 text-gray-400" />
+            <label className="block text-sm font-medium text-charcoal mb-1 flex items-center gap-2">
+              <Moon className="w-4 h-4 text-charcoal-light" />
               Quiet hours
             </label>
-            <p className="text-xs text-gray-500 mb-2">
+            <p className="text-xs text-charcoal-light mb-2">
               Bethany won't text you during these hours
             </p>
             <div className="flex items-center gap-3">
               <select
                 value={quietHoursStart}
                 onChange={(e) => setQuietHoursStart(Number(e.target.value))}
-                className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-bethany-500 focus:border-transparent outline-none"
+                className="input-field !w-auto"
               >
                 {HOURS.map(({ value, label }) => (
                   <option key={value} value={value}>{label}</option>
                 ))}
               </select>
-              <span className="text-gray-500">to</span>
+              <span className="text-charcoal-light">to</span>
               <select
                 value={quietHoursEnd}
                 onChange={(e) => setQuietHoursEnd(Number(e.target.value))}
-                className="px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-bethany-500 focus:border-transparent outline-none"
+                className="input-field !w-auto"
               >
                 {HOURS.map(({ value, label }) => (
                   <option key={value} value={value}>{label}</option>
@@ -729,14 +729,14 @@ export function SettingsPage() {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1 flex items-center gap-2">
-              <Globe className="w-4 h-4 text-gray-400" />
+            <label className="block text-sm font-medium text-charcoal mb-1 flex items-center gap-2">
+              <Globe className="w-4 h-4 text-charcoal-light" />
               Timezone
             </label>
             <select
               value={timezone}
               onChange={(e) => setTimezone(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-bethany-500 focus:border-transparent outline-none"
+              className="input-field"
             >
               {TIMEZONES.map(({ value, label }) => (
                 <option key={value} value={value}>{label}</option>
@@ -746,7 +746,7 @@ export function SettingsPage() {
 
           <button
             disabled
-            className="px-4 py-2 bg-bethany-500 text-white font-medium rounded-lg opacity-50 cursor-not-allowed flex items-center gap-2"
+            className="btn-primary opacity-50 cursor-not-allowed"
           >
             Save preferences (coming soon)
           </button>
@@ -760,22 +760,22 @@ export function SettingsPage() {
         isExpanded={expandedSections.has('circles')}
         onToggle={() => toggleSection('circles')}
         badge={
-          <span className="text-sm text-gray-500">
+          <span className="text-sm text-charcoal-light">
             {circles?.length ?? 0} circles
           </span>
         }
       >
-        <div className="divide-y divide-gray-200">
+        <div className="divide-y divide-cream-dark">
           {circles?.map((circle) => (
             <div
               key={circle.id}
-              className="px-5 py-3 flex items-center justify-between hover:bg-gray-50"
+              className="px-5 py-3 flex items-center justify-between hover:bg-cream transition-colors"
             >
               <div className="flex items-center gap-3">
-                <GripVertical className="w-4 h-4 text-gray-300" />
+                <GripVertical className="w-4 h-4 text-charcoal-300" />
                 <div>
-                  <p className="font-medium text-gray-900">{circle.name}</p>
-                  <p className="text-xs text-gray-500">
+                  <p className="font-medium text-charcoal">{circle.name}</p>
+                  <p className="text-xs text-charcoal-light">
                     {circle.contact_count ?? 0} contacts
                     {circle.type === 'default' && ' · Default'}
                   </p>
@@ -788,14 +788,14 @@ export function SettingsPage() {
                     setNewCircleName(circle.name);
                     setShowCircleModal(true);
                   }}
-                  className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg"
+                  className="p-2 text-charcoal-light hover:text-charcoal hover:bg-cream-dark rounded-xl transition-colors"
                 >
                   <Pencil className="w-4 h-4" />
                 </button>
                 {circle.type === 'custom' && (
                   <button
                     onClick={() => handleDeleteCircle(circle)}
-                    className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg"
+                    className="p-2 text-charcoal-light hover:text-red-600 hover:bg-red-50 rounded-xl transition-colors"
                   >
                     <Trash2 className="w-4 h-4" />
                   </button>
@@ -810,7 +810,7 @@ export function SettingsPage() {
                 setNewCircleName('');
                 setShowCircleModal(true);
               }}
-              className="w-full px-4 py-2 border-2 border-dashed border-gray-300 text-gray-600 font-medium rounded-lg hover:border-bethany-400 hover:text-bethany-600 transition-colors flex items-center justify-center gap-2"
+              className="w-full px-4 py-2 border-2 border-dashed border-charcoal-300 text-charcoal-light font-medium rounded-xl hover:border-bethany-400 hover:text-bethany-500 transition-colors flex items-center justify-center gap-2"
             >
               <Plus className="w-4 h-4" />
               Add circle
@@ -826,19 +826,19 @@ export function SettingsPage() {
         isExpanded={expandedSections.has('security')}
         onToggle={() => toggleSection('security')}
       >
-        <div className="divide-y divide-gray-200">
+        <div className="divide-y divide-cream-dark">
           <button
             onClick={() => setShowPinModal(true)}
-            className="w-full px-5 py-4 flex items-center justify-between hover:bg-gray-50 transition-colors"
+            className="w-full px-5 py-4 flex items-center justify-between hover:bg-cream transition-colors"
           >
             <div className="flex items-center gap-3">
-              <Shield className="w-5 h-5 text-gray-400" />
+              <Shield className="w-5 h-5 text-charcoal-light" />
               <div className="text-left">
-                <p className="font-medium text-gray-900">Change PIN</p>
-                <p className="text-sm text-gray-500">Update your 4-digit login PIN</p>
+                <p className="font-medium text-charcoal">Change PIN</p>
+                <p className="text-sm text-charcoal-light">Update your 4-digit login PIN</p>
               </div>
             </div>
-            <ChevronRight className="w-5 h-5 text-gray-400" />
+            <ChevronRight className="w-5 h-5 text-charcoal-light" />
           </button>
         </div>
       </CollapsibleSection>
@@ -854,24 +854,24 @@ export function SettingsPage() {
           <div className="flex flex-col sm:flex-row gap-3">
             <button
               onClick={handleExport}
-              className="px-4 py-2 border border-gray-300 text-gray-700 font-medium rounded-lg hover:bg-gray-50 transition-colors flex items-center justify-center gap-2"
+              className="btn-secondary"
             >
               <Download className="w-4 h-4" />
               Export contacts (CSV)
             </button>
             <Link
               to="/import"
-              className="px-4 py-2 border border-gray-300 text-gray-700 font-medium rounded-lg hover:bg-gray-50 transition-colors flex items-center justify-center gap-2"
+              className="btn-secondary"
             >
               <Upload className="w-4 h-4" />
               Import contacts
             </Link>
           </div>
           
-          <div className="pt-4 border-t border-gray-200">
+          <div className="pt-4 border-t border-cream-dark">
             <button
               onClick={() => setShowDeleteModal(true)}
-              className="text-red-600 hover:text-red-700 text-sm font-medium flex items-center gap-2"
+              className="text-red-600 hover:text-red-700 text-sm font-medium flex items-center gap-2 transition-colors"
             >
               <Trash2 className="w-4 h-4" />
               Delete my account
@@ -888,32 +888,32 @@ export function SettingsPage() {
         onToggle={() => toggleSection('integrations')}
       >
         <div className="p-5 space-y-4">
-          <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+          <div className="flex items-center justify-between p-3 bg-cream rounded-xl">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-white rounded-lg flex items-center justify-center border border-gray-200">
+              <div className="w-10 h-10 bg-warm-white rounded-xl flex items-center justify-center border border-cream-dark">
                 <svg className="w-6 h-6" viewBox="0 0 24 24" fill="none">
                   <path d="M22 12c0-5.523-4.477-10-10-10S2 6.477 2 12c0 4.99 3.657 9.128 8.438 9.878v-6.988h-2.54V12h2.54V9.797c0-2.506 1.492-3.89 3.777-3.89 1.094 0 2.238.195 2.238.195v2.46h-1.26c-1.243 0-1.63.771-1.63 1.562V12h2.773l-.443 2.89h-2.33v6.988C18.343 21.128 22 16.99 22 12z" fill="#1877F2"/>
                 </svg>
               </div>
               <div>
-                <p className="font-medium text-gray-900">Google Contacts</p>
-                <p className="text-sm text-gray-500">Sync your contacts automatically</p>
+                <p className="font-medium text-charcoal">Google Contacts</p>
+                <p className="text-sm text-charcoal-light">Sync your contacts automatically</p>
               </div>
             </div>
-            <span className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded">Coming soon</span>
+            <span className="badge-neutral">Coming soon</span>
           </div>
 
-          <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+          <div className="flex items-center justify-between p-3 bg-cream rounded-xl">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-white rounded-lg flex items-center justify-center border border-gray-200">
-                <Calendar className="w-5 h-5 text-gray-600" />
+              <div className="w-10 h-10 bg-warm-white rounded-xl flex items-center justify-center border border-cream-dark">
+                <Calendar className="w-5 h-5 text-charcoal-light" />
               </div>
               <div>
-                <p className="font-medium text-gray-900">Calendar</p>
-                <p className="text-sm text-gray-500">Schedule meetups with contacts</p>
+                <p className="font-medium text-charcoal">Calendar</p>
+                <p className="text-sm text-charcoal-light">Schedule meetups with contacts</p>
               </div>
             </div>
-            <span className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded">Coming soon</span>
+            <span className="badge-neutral">Coming soon</span>
           </div>
         </div>
       </CollapsibleSection>
@@ -922,7 +922,7 @@ export function SettingsPage() {
       <button
         onClick={handleLogout}
         disabled={isLoggingOut}
-        className="w-full px-5 py-4 bg-white rounded-xl border border-gray-200 flex items-center justify-center gap-2 text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50"
+        className="w-full card flex items-center justify-center gap-2 text-red-600 hover:bg-red-50 transition-colors disabled:opacity-50"
       >
         {isLoggingOut ? (
           <>
@@ -951,7 +951,7 @@ export function SettingsPage() {
         >
           <div className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
+              <label className="block text-sm font-medium text-charcoal mb-1">
                 Current PIN
               </label>
               <div className="relative">
@@ -961,12 +961,12 @@ export function SettingsPage() {
                   onChange={(e) => setCurrentPin(e.target.value.replace(/\D/g, '').slice(0, 4))}
                   placeholder="••••"
                   maxLength={4}
-                  className="w-full px-4 py-2 pr-10 border border-gray-300 rounded-lg focus:ring-2 focus:ring-bethany-500 focus:border-transparent outline-none font-mono text-lg tracking-widest"
+                  className="input-field pr-10 font-mono text-lg tracking-widest"
                 />
                 <button
                   type="button"
                   onClick={() => setShowCurrentPin(!showCurrentPin)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-charcoal-light hover:text-charcoal transition-colors"
                 >
                   {showCurrentPin ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                 </button>
@@ -974,7 +974,7 @@ export function SettingsPage() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
+              <label className="block text-sm font-medium text-charcoal mb-1">
                 New PIN
               </label>
               <div className="relative">
@@ -984,12 +984,12 @@ export function SettingsPage() {
                   onChange={(e) => setNewPin(e.target.value.replace(/\D/g, '').slice(0, 4))}
                   placeholder="••••"
                   maxLength={4}
-                  className="w-full px-4 py-2 pr-10 border border-gray-300 rounded-lg focus:ring-2 focus:ring-bethany-500 focus:border-transparent outline-none font-mono text-lg tracking-widest"
+                  className="input-field pr-10 font-mono text-lg tracking-widest"
                 />
                 <button
                   type="button"
                   onClick={() => setShowNewPin(!showNewPin)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-charcoal-light hover:text-charcoal transition-colors"
                 >
                   {showNewPin ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                 </button>
@@ -997,7 +997,7 @@ export function SettingsPage() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
+              <label className="block text-sm font-medium text-charcoal mb-1">
                 Confirm new PIN
               </label>
               <input
@@ -1006,15 +1006,15 @@ export function SettingsPage() {
                 onChange={(e) => setConfirmPin(e.target.value.replace(/\D/g, '').slice(0, 4))}
                 placeholder="••••"
                 maxLength={4}
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-bethany-500 focus:border-transparent outline-none font-mono text-lg tracking-widest"
+                className="input-field font-mono text-lg tracking-widest"
               />
             </div>
 
             {pinMessage && (
               <div
-                className={`p-3 rounded-lg text-sm flex items-center gap-2 ${
+                className={`p-3 rounded-xl text-sm flex items-center gap-2 ${
                   pinMessage.type === 'success'
-                    ? 'bg-green-50 text-green-700'
+                    ? 'bg-sage-50 text-sage-700'
                     : 'bg-red-50 text-red-700'
                 }`}
               >
@@ -1030,7 +1030,7 @@ export function SettingsPage() {
             <button
               onClick={handleChangePin}
               disabled={isChangingPin || currentPin.length !== 4 || newPin.length !== 4 || confirmPin.length !== 4}
-              className="w-full px-4 py-2 bg-bethany-500 text-white font-medium rounded-lg hover:bg-bethany-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              className="btn-primary w-full"
             >
               {isChangingPin ? (
                 <>
@@ -1058,7 +1058,7 @@ export function SettingsPage() {
         >
           <div className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
+              <label className="block text-sm font-medium text-charcoal mb-1">
                 Circle name
               </label>
               <input
@@ -1066,16 +1066,16 @@ export function SettingsPage() {
                 value={newCircleName}
                 onChange={(e) => setNewCircleName(e.target.value)}
                 placeholder="e.g., Book Club, Neighbors"
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-bethany-500 focus:border-transparent outline-none"
+                className="input-field"
                 autoFocus
               />
             </div>
 
             {circleMessage && (
               <div
-                className={`p-3 rounded-lg text-sm flex items-center gap-2 ${
+                className={`p-3 rounded-xl text-sm flex items-center gap-2 ${
                   circleMessage.type === 'success'
-                    ? 'bg-green-50 text-green-700'
+                    ? 'bg-sage-50 text-sage-700'
                     : 'bg-red-50 text-red-700'
                 }`}
               >
@@ -1091,7 +1091,7 @@ export function SettingsPage() {
             <button
               onClick={handleSaveCircle}
               disabled={isSavingCircle || !newCircleName.trim()}
-              className="w-full px-4 py-2 bg-bethany-500 text-white font-medium rounded-lg hover:bg-bethany-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              className="btn-primary w-full"
             >
               {isSavingCircle ? (
                 <>
@@ -1118,7 +1118,7 @@ export function SettingsPage() {
           }}
         >
           <div className="space-y-4">
-            <div className="p-4 bg-red-50 rounded-lg">
+            <div className="p-4 bg-red-50 rounded-xl">
               <p className="text-sm text-red-700">
                 <strong>Warning:</strong> This action cannot be undone. All your contacts, 
                 interactions, and settings will be permanently deleted.
@@ -1126,7 +1126,7 @@ export function SettingsPage() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
+              <label className="block text-sm font-medium text-charcoal mb-1">
                 Type <strong>DELETE</strong> to confirm
               </label>
               <input
@@ -1134,14 +1134,14 @@ export function SettingsPage() {
                 value={deleteConfirmText}
                 onChange={(e) => setDeleteConfirmText(e.target.value)}
                 placeholder="DELETE"
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-transparent outline-none"
+                className="input-field"
               />
             </div>
 
             <button
               onClick={handleDeleteAccount}
               disabled={isDeletingAccount || deleteConfirmText !== 'DELETE'}
-              className="w-full px-4 py-2 bg-red-600 text-white font-medium rounded-lg hover:bg-red-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              className="w-full px-6 py-3 bg-red-600 text-white font-medium rounded-xl hover:bg-red-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
             >
               {isDeletingAccount ? (
                 <>
@@ -1182,26 +1182,26 @@ function CollapsibleSection({
   children: React.ReactNode;
 }) {
   return (
-    <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+    <div className="card !p-0 overflow-hidden">
       <button
         onClick={onToggle}
-        className="w-full px-5 py-4 flex items-center justify-between hover:bg-gray-50 transition-colors"
+        className="w-full px-5 py-4 flex items-center justify-between hover:bg-cream transition-colors"
       >
         <div className="flex items-center gap-3">
-          <span className="text-gray-400">{icon}</span>
-          <h2 className="font-medium text-gray-900">{title}</h2>
+          <span className="text-charcoal-light">{icon}</span>
+          <h2 className="font-medium text-charcoal">{title}</h2>
         </div>
         <div className="flex items-center gap-3">
           {badge}
           {isExpanded ? (
-            <ChevronUp className="w-5 h-5 text-gray-400" />
+            <ChevronUp className="w-5 h-5 text-charcoal-light" />
           ) : (
-            <ChevronDown className="w-5 h-5 text-gray-400" />
+            <ChevronDown className="w-5 h-5 text-charcoal-light" />
           )}
         </div>
       </button>
       {isExpanded && (
-        <div className="border-t border-gray-200">
+        <div className="border-t border-cream-dark">
           {children}
         </div>
       )}
@@ -1223,13 +1223,13 @@ function Modal({
   children: React.ReactNode;
 }) {
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-xl w-full max-w-md">
-        <div className="px-5 py-4 border-b border-gray-200 flex items-center justify-between">
-          <h2 className="font-medium text-gray-900">{title}</h2>
+    <div className="fixed inset-0 bg-charcoal/50 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-fade-in">
+      <div className="card w-full max-w-md !p-0">
+        <div className="px-5 py-4 border-b border-cream-dark flex items-center justify-between">
+          <h2 className="font-display font-medium text-charcoal">{title}</h2>
           <button
             onClick={onClose}
-            className="p-1 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100"
+            className="p-1 text-charcoal-light hover:text-charcoal rounded-xl hover:bg-cream-dark transition-colors"
           >
             <X className="w-5 h-5" />
           </button>
@@ -1264,18 +1264,18 @@ function UsageBar({
   return (
     <div>
       <div className="flex items-center justify-between mb-1">
-        <div className="flex items-center gap-2 text-sm text-gray-600">
+        <div className="flex items-center gap-2 text-sm text-charcoal-light">
           {icon}
           {label}
         </div>
-        <span className={`text-sm font-medium ${isAtLimit ? 'text-red-600' : isNearLimit ? 'text-yellow-600' : 'text-gray-900'}`}>
+        <span className={`text-sm font-medium ${isAtLimit ? 'text-red-600' : isNearLimit ? 'text-golden-500' : 'text-charcoal'}`}>
           {used} / {limit}
         </span>
       </div>
-      <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+      <div className="h-2 bg-cream-dark rounded-full overflow-hidden">
         <div
           className={`h-full transition-all ${
-            isAtLimit ? 'bg-red-500' : isNearLimit ? 'bg-yellow-500' : 'bg-bethany-500'
+            isAtLimit ? 'bg-red-500' : isNearLimit ? 'bg-golden-400' : 'bg-bethany-500'
           }`}
           style={{ width: `${percentage}%` }}
         />
