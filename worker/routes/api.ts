@@ -15,6 +15,7 @@
  *   /api/import/*        — CSV import and bulk import flow
  *   /api/user/*          — Profile read/update
  *   /api/subscription/*  — Tier info, checkout, portal
+ *   /api/dashboard/*     — Dashboard tabs and dartboard data
  *   /api/stripe/webhook  — Stripe webhook handler (no auth)
  *
  * Standard response format:
@@ -24,6 +25,7 @@
  *
  * @see worker/services/auth-service.ts for requireAuth(), withRefreshedSession()
  * @see worker/services/stripe-service.ts for Stripe integration
+ * @see worker/services/score-service.ts for dartboard scoring
  * @see shared/http.ts for jsonResponse(), errorResponse()
  */
 
@@ -72,6 +74,11 @@ import {
   handleWebhook,
 } from '../services/stripe-service';
 import { parseBraindump } from '../services/braindump-service';
+import {
+  getDashboardTabs,
+  calculateDartboardData,
+  getUnsortedContacts,
+} from '../services/score-service';
 import type {
   CreateContactInput,
   UpdateContactInput,
@@ -130,8 +137,16 @@ export async function handleApiRoute(
   let response: Response;
 
   try {
+    // ─── Dashboard (Dartboard System) ─────────────────────────
+    if (path === '/api/dashboard/tabs' && method === 'GET') {
+      response = await handleGetDashboardTabs(db, user.id);
+    } else if (path.match(/^\/api\/dashboard\/dartboard\/[^/]+$/) && method === 'GET') {
+      response = await handleGetDartboard(path, db, user.id);
+    } else if (path === '/api/dashboard/unsorted' && method === 'GET') {
+      response = await handleGetUnsorted(url, db, user.id);
+
     // ─── Contacts ───────────────────────────────────────────────
-    if (path === '/api/contacts' && method === 'GET') {
+    } else if (path === '/api/contacts' && method === 'GET') {
       response = await handleListContacts(url, db, user.id);
     } else if (path === '/api/contacts' && method === 'POST') {
       response = await handleCreateContact(request, db, user.id);
@@ -188,6 +203,8 @@ export async function handleApiRoute(
       response = await handleGetUser(auth.auth);
     } else if (path === '/api/user' && method === 'PATCH') {
       response = await handleUpdateUser(request, db, user.id);
+    } else if (path === '/api/user/preferences' && method === 'PATCH') {
+      response = await handleUpdateUserPreferences(request, db, user.id);
 
     // ─── Subscription ─────────────────────────────────────────
     } else if (path === '/api/subscription' && method === 'GET') {
@@ -212,6 +229,55 @@ export async function handleApiRoute(
   }
 
   return response;
+}
+
+// ===========================================================================
+// Dashboard Handlers (Dartboard System)
+// ===========================================================================
+
+/**
+ * Get dashboard tabs — circle tabs with contact counts + unsorted count.
+ */
+async function handleGetDashboardTabs(
+  db: D1Database,
+  userId: string,
+): Promise<Response> {
+  const tabs = await getDashboardTabs(db, userId);
+  return jsonResponse({ data: tabs });
+}
+
+/**
+ * Get dartboard data for a specific circle.
+ */
+async function handleGetDartboard(
+  path: string,
+  db: D1Database,
+  userId: string,
+): Promise<Response> {
+  const circleId = path.replace('/api/dashboard/dartboard/', '');
+  
+  try {
+    const dartboard = await calculateDartboardData(db, userId, circleId);
+    return jsonResponse({ data: dartboard });
+  } catch (err) {
+    if (err instanceof Error && err.message.includes('not found')) {
+      return errorResponse('Circle not found', 404);
+    }
+    throw err;
+  }
+}
+
+/**
+ * Get unsorted contacts (no circle assigned).
+ */
+async function handleGetUnsorted(
+  url: URL,
+  db: D1Database,
+  userId: string,
+): Promise<Response> {
+  const limit = Math.min(parseInt(url.searchParams.get('limit') ?? '50', 10), 100);
+  const unsorted = await getUnsortedContacts(db, userId, limit);
+  return jsonResponse({ data: unsorted });
 }
 
 // ===========================================================================
@@ -609,6 +675,8 @@ async function handleGetUser(auth: AuthContext): Promise<Response> {
       gender: user.gender,
       subscriptionTier: user.subscription_tier,
       onboardingStage: user.onboarding_stage,
+      defaultCircleId: user.default_circle_id,
+      circleTabOrder: user.circle_tab_order ? JSON.parse(user.circle_tab_order) : null,
       createdAt: user.created_at,
     },
   });
@@ -661,6 +729,46 @@ async function handleUpdateUser(
     .first();
 
   return jsonResponse({ data: user });
+}
+
+/**
+ * Update user dashboard preferences (default tab, tab order).
+ */
+async function handleUpdateUserPreferences(
+  request: Request,
+  db: D1Database,
+  userId: string,
+): Promise<Response> {
+  const body = await request.json<{
+    defaultCircleId?: string | null;
+    circleTabOrder?: string[];
+  }>();
+
+  const sets: string[] = [];
+  const binds: unknown[] = [];
+
+  if (body.defaultCircleId !== undefined) {
+    sets.push('default_circle_id = ?');
+    binds.push(body.defaultCircleId);
+  }
+  if (body.circleTabOrder !== undefined) {
+    sets.push('circle_tab_order = ?');
+    binds.push(JSON.stringify(body.circleTabOrder));
+  }
+
+  if (sets.length === 0) {
+    return errorResponse('No preferences to update', 400);
+  }
+
+  sets.push("updated_at = datetime('now')");
+  binds.push(userId);
+
+  await db
+    .prepare(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`)
+    .bind(...binds)
+    .run();
+
+  return jsonResponse({ data: { updated: true } });
 }
 
 // ===========================================================================
