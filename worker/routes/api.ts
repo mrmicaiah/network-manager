@@ -62,7 +62,7 @@ import {
 } from '../services/circle-service';
 import {
   logInteraction,
-  listInteractions,
+  getInteractionHistory,
   getRecentInteractions,
 } from '../services/interaction-service';
 import { exportContacts, type ExportFilters } from '../services/export-service';
@@ -507,12 +507,12 @@ async function handleListInteractions(
   const limit = Math.min(parseInt(url.searchParams.get('limit') ?? '20', 10), 100);
 
   if (contactId) {
-    const interactions = await listInteractions(db, userId, contactId, limit);
-    return jsonResponse({ data: interactions });
+    const result = await getInteractionHistory(db, userId, contactId, limit);
+    return jsonResponse({ data: result.interactions });
   }
 
   // Recent interactions across all contacts
-  const interactions = await getRecentInteractions(db, userId, limit);
+  const interactions = await getRecentInteractions(db, userId, 7, limit);
   return jsonResponse({ data: interactions });
 }
 
