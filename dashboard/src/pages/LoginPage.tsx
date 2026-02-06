@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { CheckCircle } from 'lucide-react';
 
 type Step = 'phone' | 'code';
 
@@ -130,29 +131,36 @@ export function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 px-4">
-      <div className="w-full max-w-sm">
+    <div className="min-h-screen flex items-center justify-center bg-cream px-4">
+      {/* Decorative background blobs */}
+      <div className="fixed inset-0 overflow-hidden pointer-events-none">
+        <div className="absolute top-20 -left-32 w-96 h-96 bg-blush rounded-full opacity-30 blur-3xl" />
+        <div className="absolute bottom-20 -right-32 w-80 h-80 bg-sage-200 rounded-full opacity-20 blur-3xl" />
+      </div>
+
+      <div className="w-full max-w-sm relative z-10">
         {/* Logo */}
         <div className="text-center mb-8">
-          <div className="w-16 h-16 bg-bethany-500 rounded-full flex items-center justify-center mx-auto mb-4">
-            <span className="text-white font-bold text-2xl">B</span>
+          <div className="w-16 h-16 bg-bethany-500 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-warm">
+            <span className="text-warm-white font-display font-bold text-3xl">B</span>
           </div>
-          <h1 className="text-2xl font-semibold text-gray-900">Bethany</h1>
-          <p className="text-gray-500 mt-1">Network Manager</p>
+          <h1 className="font-display text-2xl font-medium text-charcoal">Welcome back</h1>
+          <p className="text-charcoal-light mt-1">Sign in to your account</p>
         </div>
 
         {/* Welcome message for new signups */}
         {isWelcome && step === 'phone' && (
-          <div className="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-xl text-sm mb-4">
-            🎉 Account created! Enter your phone number to log in.
+          <div className="bg-sage-50 border border-sage-200 text-sage-700 px-4 py-3 rounded-xl text-sm mb-4 flex items-center gap-2">
+            <CheckCircle className="w-5 h-5 text-sage-500 flex-shrink-0" />
+            Account created! Enter your phone number to log in.
           </div>
         )}
 
-        {/* Form */}
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+        {/* Form Card */}
+        <div className="card">
           {step === 'phone' ? (
             <form onSubmit={handlePhoneSubmit}>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
+              <label className="block text-sm font-medium text-charcoal mb-2">
                 Phone number
               </label>
               <input
@@ -160,29 +168,29 @@ export function LoginPage() {
                 value={phone}
                 onChange={handlePhoneChange}
                 placeholder="(555) 123-4567"
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-bethany-500 focus:border-transparent outline-none"
+                className="input-field"
                 autoFocus
                 required
               />
-              <p className="text-xs text-gray-500 mt-2">
+              <p className="text-xs text-charcoal-light mt-2">
                 We'll text you a code to verify it's you.
               </p>
 
               {error && (
-                <p className="text-sm text-red-600 mt-3">{error}</p>
+                <p className="error-message">{error}</p>
               )}
 
               <button
                 type="submit"
                 disabled={isLoading || getRawPhone().length !== 10}
-                className="w-full mt-4 px-4 py-2 bg-bethany-500 text-white font-medium rounded-lg hover:bg-bethany-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                className="btn-primary w-full mt-5"
               >
                 {isLoading ? 'Sending...' : 'Send code'}
               </button>
             </form>
           ) : (
             <form onSubmit={handleCodeSubmit}>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
+              <label className="block text-sm font-medium text-charcoal mb-2">
                 Verification code
               </label>
               <input
@@ -191,23 +199,23 @@ export function LoginPage() {
                 value={code}
                 onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
                 placeholder="123456"
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-bethany-500 focus:border-transparent outline-none text-center text-2xl tracking-widest"
+                className="input-field text-center text-2xl tracking-widest font-mono"
                 autoFocus
                 required
                 maxLength={6}
               />
-              <p className="text-xs text-gray-500 mt-2">
+              <p className="text-xs text-charcoal-light mt-2">
                 Enter the 6-digit code we sent to {phone}
               </p>
 
               {error && (
-                <p className="text-sm text-red-600 mt-3">{error}</p>
+                <p className="error-message">{error}</p>
               )}
 
               <button
                 type="submit"
                 disabled={isLoading || code.length !== 6}
-                className="w-full mt-4 px-4 py-2 bg-bethany-500 text-white font-medium rounded-lg hover:bg-bethany-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                className="btn-primary w-full mt-5"
               >
                 {isLoading ? 'Verifying...' : 'Verify'}
               </button>
@@ -218,12 +226,12 @@ export function LoginPage() {
                   <button
                     type="button"
                     onClick={handleResend}
-                    className="text-sm text-bethany-600 hover:text-bethany-700 font-medium"
+                    className="text-sm text-bethany-500 hover:text-bethany-600 font-medium transition-colors"
                   >
                     Resend code
                   </button>
                 ) : (
-                  <p className="text-sm text-gray-500">
+                  <p className="text-sm text-charcoal-light">
                     Resend code in {resendCountdown}s
                   </p>
                 )}
@@ -236,7 +244,7 @@ export function LoginPage() {
                   setCode('');
                   setError('');
                 }}
-                className="w-full mt-2 px-4 py-2 text-gray-600 text-sm hover:text-gray-900"
+                className="btn-ghost w-full mt-2"
               >
                 Use a different number
               </button>
@@ -244,9 +252,9 @@ export function LoginPage() {
           )}
         </div>
 
-        <p className="text-center text-xs text-gray-500 mt-6">
+        <p className="text-center text-sm text-charcoal-light mt-6">
           Don't have an account?{' '}
-          <a href="/signup" className="text-bethany-600 hover:underline">
+          <a href="/signup" className="text-bethany-500 hover:text-bethany-600 font-medium transition-colors">
             Sign up
           </a>
         </p>
