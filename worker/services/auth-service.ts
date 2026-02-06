@@ -50,6 +50,7 @@
 
 import type { Env } from '../../shared/types';
 import type { UserRow } from '../../shared/models';
+import { corsHeaders } from '../../shared/http';
 import { getUserByPhone } from './user-service';
 
 // ===========================================================================
@@ -125,6 +126,24 @@ export type VerifyCodeResult =
 export type SessionValidation =
   | { valid: true; auth: AuthContext; refreshedCookie?: string }
   | { valid: false; reason: 'missing' | 'invalid' | 'expired' | 'user_not_found'; message: string };
+
+// ===========================================================================
+// Response Helpers (with CORS)
+// ===========================================================================
+
+/**
+ * Create a JSON response with CORS headers.
+ */
+function jsonAuthResponse(data: unknown, status = 200, extraHeaders?: Record<string, string>): Response {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: {
+      ...corsHeaders,
+      'Content-Type': 'application/json',
+      ...extraHeaders,
+    },
+  });
+}
 
 // ===========================================================================
 // Code Generation & Sending
@@ -488,7 +507,7 @@ export function buildSessionCookie(token: string, now?: Date): string {
     'Path=/',
     'HttpOnly',
     'Secure',
-    'SameSite=Lax',
+    'SameSite=None',  // Required for cross-origin cookies
   ].join('; ');
 }
 
@@ -502,7 +521,7 @@ export function buildLogoutCookie(): string {
     'Path=/',
     'HttpOnly',
     'Secure',
-    'SameSite=Lax',
+    'SameSite=None',  // Must match the original cookie
   ].join('; ');
 }
 
@@ -606,10 +625,9 @@ function buildAuthErrorResponse(reason: string, message: string): Response {
     {
       status: 401,
       headers: {
+        ...corsHeaders,
         'Content-Type': 'application/json',
         'Set-Cookie': buildLogoutCookie(),
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Credentials': 'true',
       },
     },
   );
@@ -647,34 +665,22 @@ export async function handleSendCode(
 ): Promise<Response> {
   const body = await request.json<{ phone?: string }>();
   if (!body.phone) {
-    return new Response(
-      JSON.stringify({ error: 'Phone number is required.' }),
-      { status: 400, headers: { 'Content-Type': 'application/json' } },
-    );
+    return jsonAuthResponse({ error: 'Phone number is required.' }, 400);
   }
 
   const phone = normalizePhone(body.phone);
   if (!phone) {
-    return new Response(
-      JSON.stringify({ error: 'Invalid phone number format.' }),
-      { status: 400, headers: { 'Content-Type': 'application/json' } },
-    );
+    return jsonAuthResponse({ error: 'Invalid phone number format.' }, 400);
   }
 
   const result = await sendVerificationCode(env.DB, env, phone);
 
   if (!result.success) {
     const statusCode = result.reason === 'rate_limited' ? 429 : 400;
-    return new Response(
-      JSON.stringify({ error: result.message, reason: result.reason }),
-      { status: statusCode, headers: { 'Content-Type': 'application/json' } },
-    );
+    return jsonAuthResponse({ error: result.message, reason: result.reason }, statusCode);
   }
 
-  return new Response(
-    JSON.stringify({ success: true, expiresInMinutes: result.expiresInMinutes }),
-    { status: 200, headers: { 'Content-Type': 'application/json' } },
-  );
+  return jsonAuthResponse({ success: true, expiresInMinutes: result.expiresInMinutes });
 }
 
 /**
@@ -689,36 +695,30 @@ export async function handleVerifyCode(
 ): Promise<Response> {
   const body = await request.json<{ phone?: string; code?: string }>();
   if (!body.phone || !body.code) {
-    return new Response(
-      JSON.stringify({ error: 'Phone number and code are required.' }),
-      { status: 400, headers: { 'Content-Type': 'application/json' } },
-    );
+    return jsonAuthResponse({ error: 'Phone number and code are required.' }, 400);
   }
 
   const phone = normalizePhone(body.phone);
   if (!phone) {
-    return new Response(
-      JSON.stringify({ error: 'Invalid phone number format.' }),
-      { status: 400, headers: { 'Content-Type': 'application/json' } },
-    );
+    return jsonAuthResponse({ error: 'Invalid phone number format.' }, 400);
   }
 
   const result = await verifyCode(env.DB, env, phone, body.code.trim());
 
   if (!result.success) {
-    return new Response(
-      JSON.stringify({
+    return jsonAuthResponse(
+      {
         error: result.message,
         reason: result.reason,
         attemptsRemaining: 'attemptsRemaining' in result ? result.attemptsRemaining : undefined,
-      }),
-      { status: 401, headers: { 'Content-Type': 'application/json' } },
+      },
+      401,
     );
   }
 
   // Return user info with Set-Cookie
-  return new Response(
-    JSON.stringify({
+  return jsonAuthResponse(
+    {
       success: true,
       user: {
         id: result.user.id,
@@ -727,15 +727,9 @@ export async function handleVerifyCode(
         email: result.user.email,
         subscriptionTier: result.user.subscription_tier,
       },
-    }),
-    {
-      status: 200,
-      headers: {
-        'Content-Type': 'application/json',
-        'Set-Cookie': result.cookie,
-        'Access-Control-Allow-Credentials': 'true',
-      },
     },
+    200,
+    { 'Set-Cookie': result.cookie },
   );
 }
 
@@ -745,15 +739,10 @@ export async function handleVerifyCode(
  * Clears the session cookie. No body needed.
  */
 export async function handleLogout(): Promise<Response> {
-  return new Response(
-    JSON.stringify({ success: true, message: 'Logged out.' }),
-    {
-      status: 200,
-      headers: {
-        'Content-Type': 'application/json',
-        'Set-Cookie': buildLogoutCookie(),
-      },
-    },
+  return jsonAuthResponse(
+    { success: true, message: 'Logged out.' },
+    200,
+    { 'Set-Cookie': buildLogoutCookie() },
   );
 }
 
@@ -770,21 +759,15 @@ export async function handleGetMe(
   const auth = await requireAuth(request, env);
   if (!auth.valid) return auth.response;
 
-  let response = new Response(
-    JSON.stringify({
-      user: {
-        id: auth.auth.user.id,
-        name: auth.auth.user.name,
-        phone: auth.auth.user.phone,
-        email: auth.auth.user.email,
-        subscriptionTier: auth.auth.user.subscription_tier,
-      },
-    }),
-    {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
+  let response = jsonAuthResponse({
+    user: {
+      id: auth.auth.user.id,
+      name: auth.auth.user.name,
+      phone: auth.auth.user.phone,
+      email: auth.auth.user.email,
+      subscriptionTier: auth.auth.user.subscription_tier,
     },
-  );
+  });
 
   if (auth.refreshedCookie) {
     response = withRefreshedSession(response, auth.refreshedCookie);
