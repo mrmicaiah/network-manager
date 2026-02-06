@@ -1,8 +1,11 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 
 type Step = 'phone' | 'code';
+
+/** Resend cooldown in seconds */
+const RESEND_COOLDOWN = 60;
 
 export function LoginPage() {
   const { requestCode, login, isAuthenticated } = useAuth();
@@ -15,6 +18,14 @@ export function LoginPage() {
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
+  // Resend timer state
+  const [canResend, setCanResend] = useState(false);
+  const [resendCountdown, setResendCountdown] = useState(RESEND_COOLDOWN);
+
+  // Check for welcome query param (from signup redirect)
+  const searchParams = new URLSearchParams(location.search);
+  const isWelcome = searchParams.get('welcome') === 'true';
+
   // Redirect if already authenticated
   if (isAuthenticated) {
     const from = (location.state as { from?: { pathname: string } })?.from?.pathname || '/';
@@ -22,13 +33,60 @@ export function LoginPage() {
     return null;
   }
 
+  // Resend countdown timer
+  useEffect(() => {
+    if (step === 'code') {
+      setCanResend(false);
+      setResendCountdown(RESEND_COOLDOWN);
+
+      const timer = setInterval(() => {
+        setResendCountdown((prev) => {
+          if (prev <= 1) {
+            setCanResend(true);
+            clearInterval(timer);
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+
+      return () => clearInterval(timer);
+    }
+  }, [step]);
+
+  /**
+   * Format phone number as user types: (555) 123-4567
+   */
+  const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    let value = e.target.value.replace(/\D/g, '');
+    if (value.length > 10) value = value.slice(0, 10);
+
+    if (value.length >= 6) {
+      value = '(' + value.slice(0, 3) + ') ' + value.slice(3, 6) + '-' + value.slice(6);
+    } else if (value.length >= 3) {
+      value = '(' + value.slice(0, 3) + ') ' + value.slice(3);
+    }
+
+    setPhone(value);
+  };
+
+  /**
+   * Extract raw digits from formatted phone for API calls.
+   */
+  const getRawPhone = () => phone.replace(/\D/g, '');
+
   const handlePhoneSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+
+    const rawPhone = getRawPhone();
+    if (rawPhone.length !== 10) {
+      setError('Please enter a valid 10-digit phone number');
+      return;
+    }
+
     setIsLoading(true);
-
-    const result = await requestCode(phone);
-
+    const result = await requestCode(rawPhone);
     setIsLoading(false);
 
     if (result.success) {
@@ -43,7 +101,8 @@ export function LoginPage() {
     setError('');
     setIsLoading(true);
 
-    const result = await login(phone, code);
+    const rawPhone = getRawPhone();
+    const result = await login(rawPhone, code);
 
     setIsLoading(false);
 
@@ -52,6 +111,21 @@ export function LoginPage() {
       navigate(from, { replace: true });
     } else {
       setError(result.error || 'Invalid code');
+    }
+  };
+
+  const handleResend = async () => {
+    if (!canResend) return;
+
+    setError('');
+    setCanResend(false);
+    setResendCountdown(RESEND_COOLDOWN);
+
+    const rawPhone = getRawPhone();
+    const result = await requestCode(rawPhone);
+
+    if (!result.success) {
+      setError(result.error || 'Failed to resend code');
     }
   };
 
@@ -67,6 +141,13 @@ export function LoginPage() {
           <p className="text-gray-500 mt-1">Network Manager</p>
         </div>
 
+        {/* Welcome message for new signups */}
+        {isWelcome && step === 'phone' && (
+          <div className="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-xl text-sm mb-4">
+            🎉 Account created! Enter your phone number to log in.
+          </div>
+        )}
+
         {/* Form */}
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
           {step === 'phone' ? (
@@ -77,7 +158,7 @@ export function LoginPage() {
               <input
                 type="tel"
                 value={phone}
-                onChange={(e) => setPhone(e.target.value)}
+                onChange={handlePhoneChange}
                 placeholder="(555) 123-4567"
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-bethany-500 focus:border-transparent outline-none"
                 autoFocus
@@ -93,7 +174,7 @@ export function LoginPage() {
 
               <button
                 type="submit"
-                disabled={isLoading || !phone.trim()}
+                disabled={isLoading || getRawPhone().length !== 10}
                 className="w-full mt-4 px-4 py-2 bg-bethany-500 text-white font-medium rounded-lg hover:bg-bethany-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
                 {isLoading ? 'Sending...' : 'Send code'}
@@ -130,6 +211,23 @@ export function LoginPage() {
               >
                 {isLoading ? 'Verifying...' : 'Verify'}
               </button>
+
+              {/* Resend code */}
+              <div className="mt-4 text-center">
+                {canResend ? (
+                  <button
+                    type="button"
+                    onClick={handleResend}
+                    className="text-sm text-bethany-600 hover:text-bethany-700 font-medium"
+                  >
+                    Resend code
+                  </button>
+                ) : (
+                  <p className="text-sm text-gray-500">
+                    Resend code in {resendCountdown}s
+                  </p>
+                )}
+              </div>
 
               <button
                 type="button"
