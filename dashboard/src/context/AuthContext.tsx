@@ -8,6 +8,13 @@ import {
 } from 'react';
 
 // ===========================================================================
+// Configuration
+// ===========================================================================
+
+/** API base URL — falls back to same-origin if not set */
+const API_URL = import.meta.env.VITE_API_URL || '';
+
+// ===========================================================================
 // Types
 // ===========================================================================
 
@@ -64,7 +71,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const checkSession = async () => {
     try {
-      const res = await fetch('/api/auth/me', {
+      const res = await fetch(`${API_URL}/api/auth/me`, {
         credentials: 'include',
       });
 
@@ -93,9 +100,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const requestCode = useCallback(async (phone: string) => {
     try {
-      const res = await fetch('/api/auth/send-code', {
+      const res = await fetch(`${API_URL}/api/auth/send-code`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({ phone }),
       });
 
@@ -113,7 +121,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(async (phone: string, code: string) => {
     try {
-      const res = await fetch('/api/auth/verify', {
+      const res = await fetch(`${API_URL}/api/auth/verify`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
@@ -142,7 +150,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = useCallback(async () => {
     try {
-      await fetch('/api/auth/logout', {
+      await fetch(`${API_URL}/api/auth/logout`, {
         method: 'POST',
         credentials: 'include',
       });
