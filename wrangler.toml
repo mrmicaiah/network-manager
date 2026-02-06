@@ -3,9 +3,6 @@ main = "worker/index.ts"
 compatibility_date = "2025-01-01"
 compatibility_flags = ["nodejs_compat"]
 
-# Disable preview URLs — required for Durable Objects on free plan
-preview_urls = false
-
 # D1 Database — contact graph, users, interactions
 [[d1_databases]]
 binding = "DB"
@@ -47,29 +44,26 @@ tag = "v1"
 new_sqlite_classes = ["OnboardingDO", "UserDiscoveryDO", "NudgeContextDO", "IntentSortingDO"]
 
 # ===========================================================================
-# Cron Triggers — Scheduled Jobs (Free plan: max 5 triggers)
+# Cron Triggers — Scheduled Jobs
 # ===========================================================================
 #
-# All times are UTC. Central Time is UTC-6 (standard) or UTC-5 (daylight).
+# All times are UTC.
 #
-# Active triggers:
-#   0 9 * * *   — Daily nudge generation (3am Central)
-#   0 10 * * 1  — Weekly sorting check-in (Monday 4am Central)
-#   0 0 * * *   — Midnight maintenance (trial expiration, usage cleanup)
+# Hourly trigger handles timezone-aware delivery:
+#   - Checks which users have their preferred hour NOW in their timezone
+#   - Sends nudges only to those users
 #
-# Commented out for later:
-#   0 14 * * *  — Nudge delivery window (8am Central)
-#   0 6 * * 1   — Weekly health recalculation (Monday 6am UTC)
+# Daily/Weekly triggers for batch processing:
+#   0 0 * * *   — Midnight UTC: trial expiration, usage cleanup
+#   0 6 * * 1   — Monday 6am UTC: weekly health recalculation
 #
 # @see worker/cron/scheduled.ts for job implementations
 # ===========================================================================
 [triggers]
 crons = [
-  "0 9 * * *",   # Daily nudge generation (3am Central)
-  "0 10 * * 1",  # Weekly sorting check-in (Monday 4am Central)
-  "0 0 * * *",   # Midnight: trial expiration + usage cleanup
-  # "0 14 * * *",  # Nudge delivery (8am Central) — add back when needed
-  # "0 6 * * 1",   # Weekly health recalc (Monday) — add back when needed
+  "0 * * * *",   # Hourly: timezone-aware nudge generation & delivery
+  "0 0 * * *",   # Midnight UTC: trial expiration + usage cleanup
+  "0 6 * * 1",   # Monday 6am UTC: weekly health recalculation
 ]
 
 [vars]
