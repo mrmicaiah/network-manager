@@ -1,0 +1,26 @@
+{
+  "name": "bethany-network-manager",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Bethany's Network Manager — Dunbar-based contact relationship management via SMS",
+  "scripts": {
+    "dev": "wrangler dev",
+    "dev:remote": "wrangler dev --remote",
+    "deploy": "wrangler deploy",
+    "deploy:dry": "wrangler deploy --dry-run",
+    "tail": "wrangler tail",
+    "db:create": "wrangler d1 create bethany-network-db",
+    "db:migrate": "wrangler d1 execute bethany-network-db --file=./schema.sql",
+    "db:migrate:local": "wrangler d1 execute bethany-network-db --file=./schema.sql --local",
+    "db:seed": "wrangler d1 execute bethany-network-db --file=./seed.sql",
+    "db:seed:local": "wrangler d1 execute bethany-network-db --file=./seed.sql --local",
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit && echo 'Types OK'"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250101.0",
+    "typescript": "^5.7.0",
+    "wrangler": "^3.99.0"
+  }
+}

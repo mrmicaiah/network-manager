@@ -1,0 +1,97 @@
+name = "bethany-network-manager"
+main = "worker/index.ts"
+compatibility_date = "2025-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+# D1 Database — contact graph, users, interactions
+[[d1_databases]]
+binding = "DB"
+database_name = "bethany-network-db"
+# database_id = "" # Set after: wrangler d1 create bethany-network-db
+
+# R2 for bulk imports, exports, backups
+[[r2_buckets]]
+binding = "STORAGE"
+bucket_name = "bethany-network-storage"
+
+# ===========================================================================
+# Durable Objects — Conversation State Management
+# ===========================================================================
+
+# Post-signup onboarding conversations
+[[durable_objects.bindings]]
+name = "ONBOARDING_DO"
+class_name = "OnboardingDO"
+
+# Pre-signup discovery conversations (unknown numbers)
+[[durable_objects.bindings]]
+name = "USER_DISCOVERY_DO"
+class_name = "UserDiscoveryDO"
+
+# Pending nudge context for follow-up handling
+[[durable_objects.bindings]]
+name = "NUDGE_CONTEXT_DO"
+class_name = "NudgeContextDO"
+
+# Intent sorting session state
+[[durable_objects.bindings]]
+name = "INTENT_SORTING_DO"
+class_name = "IntentSortingDO"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["OnboardingDO"]
+
+[[migrations]]
+tag = "v2"
+new_classes = ["UserDiscoveryDO"]
+
+[[migrations]]
+tag = "v3"
+new_classes = ["NudgeContextDO"]
+
+[[migrations]]
+tag = "v4"
+new_classes = ["IntentSortingDO"]
+
+# ===========================================================================
+# Cron Triggers — Scheduled Jobs
+# ===========================================================================
+#
+# All times are UTC. Central Time is UTC-6 (standard) or UTC-5 (daylight).
+#
+# Job schedule:
+#   0 9 * * *   — Daily nudge generation for premium/trial users (3am Central)
+#   0 9 * * 1   — Weekly nudge generation for free users (Monday 3am Central)
+#   0 10 * * 1  — Weekly sorting check-in (Monday 4am Central)
+#   0 14 * * *  — Nudge delivery window (8am Central)
+#   0 0 * * *   — Midnight maintenance (trial expiration, usage cleanup)
+#   0 0 * * 0   — Weekly health recalculation (Sunday midnight)
+#
+# @see worker/cron/scheduled.ts for job implementations
+# ===========================================================================
+[triggers]
+crons = [
+  "0 9 * * *",   # Daily nudge generation (premium/trial)
+  "0 9 * * 1",   # Weekly nudge generation (free tier, Monday only)
+  "0 10 * * 1",  # Weekly sorting check-in (Monday, 1hr after nudges)
+  "0 14 * * *",  # Nudge delivery (morning window)
+  "0 0 * * *",   # Midnight: trial expiration check + usage cleanup
+  "0 0 * * 0",   # Sunday: weekly health recalculation
+]
+
+[vars]
+# Non-secret config
+ENVIRONMENT = "production"
+BETHANY_WORKER_URL = "https://bethany.mrmicaiah.workers.dev"
+SIGNUP_BASE_URL = "https://app.untitledpublishers.com"
+MAX_FREE_CONTACTS = "15"
+TRIAL_DAYS = "14"
+
+# Secrets (set via `wrangler secret put <n>`):
+# ANTHROPIC_API_KEY      — Claude API for braindump parsing, nudge generation
+# SENDBLUE_API_KEY       — SMS delivery
+# SENDBLUE_API_SECRET    — SMS delivery
+# SENDBLUE_PHONE_NUMBER  — Bethany's phone number
+# PIN_SIGNING_SECRET     — HMAC signing for PIN verification tokens
+# INTERNAL_API_KEY       — Auth between Bethany worker and Network Manager
