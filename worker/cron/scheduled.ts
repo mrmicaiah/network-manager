@@ -1,20 +1,18 @@
 /**
  * Scheduled Jobs — Cloudflare Cron Trigger handlers.
  *
- * Each cron trigger defined in wrangler.toml routes here via the
- * scheduled() export in index.ts. Jobs are lightweight dispatchers
- * that call into the appropriate service functions.
+ * TIMEZONE-AWARE DELIVERY:
+ *
+ *   The hourly trigger (`0 * * * *`) handles all timezone-sensitive jobs.
+ *   Each user has a `timezone` and `preferred_nudge_hour` in their profile.
+ *   The hourly job checks: "Which users have their preferred hour NOW?"
+ *   and only processes those users.
  *
  * Cron schedule (all times UTC):
  *
- *   0 9 * * *    → dailyNudgeGeneration (3am Central) — premium users
- *   0 9 * * *    → dailyTrialReminders (3am Central) — trial messaging
- *   0 9 * * 1    → weeklyNudgeGeneration (Monday 3am Central) — free users
- *   0 10 * * 1   → weeklySortingCheckin (Monday 4am Central) — sorting offers
- *   0 14 * * *   → nudgeDelivery (8am Central) — send pending nudges
- *   0 0 * * *    → trialExpirationCheck (midnight) — downgrade expired trials
- *   0 0 * * *    → usageDataCleanup (midnight) — purge old usage rows
- *   0 0 * * 0    → healthRecalculation (Sunday midnight) — refresh health statuses
+ *   0 * * * *    → Hourly: timezone-aware nudge generation, delivery, sorting
+ *   0 0 * * *    → Midnight UTC: trial expiration, usage cleanup
+ *   0 6 * * 1    → Monday 6am UTC: weekly health recalculation
  *
  * Error handling:
  *
@@ -26,8 +24,6 @@
  * @see worker/services/subscription-service.ts for processExpiredTrials()
  * @see worker/services/contact-service.ts for recalculateAllHealthStatuses()
  * @see worker/services/nudge-service.ts for nudge generation and delivery
- * @see worker/services/sorting-checkin-service.ts for weekly sorting offers
- * @see worker/services/trial-messaging-service.ts for trial lifecycle messaging
  */
 
 import type { Env } from '../../shared/types';
@@ -57,16 +53,64 @@ export interface CronJobResult {
   error?: string;
 }
 
+/**
+ * User with timezone info for hourly processing.
+ */
+interface UserWithTimezone {
+  id: string;
+  name: string;
+  timezone: string;
+  preferred_nudge_hour: number;
+  subscription_tier: string;
+}
+
+// ===========================================================================
+// Timezone Helpers
+// ===========================================================================
+
+/**
+ * Get the current hour in a given timezone.
+ * Returns 0-23.
+ */
+function getCurrentHourInTimezone(timezone: string): number {
+  try {
+    const now = new Date();
+    const formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone,
+      hour: 'numeric',
+      hour12: false,
+    });
+    const hourStr = formatter.format(now);
+    return parseInt(hourStr, 10);
+  } catch {
+    // Invalid timezone, default to UTC
+    return new Date().getUTCHours();
+  }
+}
+
+/**
+ * Check if it's Monday in the given timezone.
+ */
+function isMondayInTimezone(timezone: string): boolean {
+  try {
+    const now = new Date();
+    const formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone,
+      weekday: 'long',
+    });
+    return formatter.format(now) === 'Monday';
+  } catch {
+    // Invalid timezone, check UTC
+    return new Date().getUTCDay() === 1;
+  }
+}
+
 // ===========================================================================
 // Main Dispatcher
 // ===========================================================================
 
 /**
  * Route a scheduled event to the appropriate job handler(s).
- *
- * Called from index.ts scheduled() export. A single cron time can
- * trigger multiple jobs (e.g., midnight runs both trial check and
- * usage cleanup).
  *
  * @param event - Cloudflare ScheduledEvent with cron trigger info
  * @param env   - Worker environment bindings
@@ -82,25 +126,11 @@ export async function handleScheduled(
 
   console.log(`[cron] Triggered: ${trigger} at ${new Date().toISOString()}`);
 
-  // ─── 9am UTC daily (3am Central) — Premium nudge generation + trial reminders ───
-  if (trigger === '0 9 * * *') {
-    results.push(await runJob('dailyNudgeGeneration', () => dailyNudgeGeneration(env)));
-    results.push(await runJob('dailyTrialReminders', () => dailyTrialReminders(env)));
-  }
-
-  // ─── 9am UTC Monday (3am Central Monday) — Free tier weekly nudges ───
-  if (trigger === '0 9 * * 1') {
-    results.push(await runJob('weeklyNudgeGeneration', () => weeklyNudgeGeneration(env)));
-  }
-
-  // ─── 10am UTC Monday (4am Central Monday) — Weekly sorting check-in ───
-  if (trigger === '0 10 * * 1') {
-    results.push(await runJob('weeklySortingCheckin', () => weeklySortingCheckin(env)));
-  }
-
-  // ─── 2pm UTC daily (8am Central) — Deliver pending nudges ───
-  if (trigger === '0 14 * * *') {
-    results.push(await runJob('nudgeDelivery', () => nudgeDelivery(env)));
+  // ─── Hourly: Timezone-aware nudge generation & delivery ───
+  if (trigger === '0 * * * *') {
+    results.push(await runJob('hourlyNudgeProcessing', () => hourlyNudgeProcessing(env)));
+    results.push(await runJob('hourlyTrialReminders', () => hourlyTrialReminders(env)));
+    results.push(await runJob('hourlySortingCheckin', () => hourlySortingCheckin(env)));
   }
 
   // ─── Midnight UTC daily — Trial expiration + usage cleanup ───
@@ -109,8 +139,8 @@ export async function handleScheduled(
     results.push(await runJob('usageDataCleanup', () => usageDataCleanup(env)));
   }
 
-  // ─── Midnight UTC Sunday — Weekly health recalculation ───
-  if (trigger === '0 0 * * 0') {
+  // ─── Monday 6am UTC — Weekly health recalculation ───
+  if (trigger === '0 6 * * 1') {
     results.push(await runJob('healthRecalculation', () => healthRecalculation(env)));
   }
 
@@ -160,240 +190,193 @@ async function runJob(
 }
 
 // ===========================================================================
-// Job Implementations
+// Timezone-Aware Hourly Jobs
 // ===========================================================================
 
 /**
- * Daily nudge generation for premium users.
+ * Hourly nudge generation and delivery.
  *
- * Runs at 3am Central so nudges are ready for the 8am delivery window.
- * Only processes premium and active trial users — they get daily nudges.
+ * Runs every hour. For each user, checks if their preferred_nudge_hour
+ * matches the current hour in their timezone. If so:
+ *   1. Generate nudges for that user
+ *   2. Immediately deliver any pending nudges
  *
- * Smart grouping limits:
- *   - Maximum 5 nudges per user per day
- *   - Prioritized by urgency (red health > yellow, inner circle > outer)
- *   - Respects 48-hour cooldown per contact
+ * This ensures users get nudges at 8am (or their preferred time) in
+ * their local timezone, regardless of where they are in the world.
  */
-async function dailyNudgeGeneration(env: Env): Promise<Record<string, unknown>> {
+async function hourlyNudgeProcessing(env: Env): Promise<Record<string, unknown>> {
   const db = env.DB;
 
-  // Get all premium/trial users with at least one active contact
+  // Get all users with their timezone settings
   const { results: users } = await db
     .prepare(
-      `SELECT DISTINCT u.id, u.name
+      `SELECT DISTINCT u.id, u.name, u.timezone, u.preferred_nudge_hour, u.subscription_tier
        FROM users u
        INNER JOIN contacts c ON u.id = c.user_id
-       WHERE u.subscription_tier IN ('premium', 'trial')
-         AND c.archived = 0
-         AND c.intent NOT IN ('dormant', 'new')`
+       WHERE c.archived = 0
+         AND c.intent NOT IN ('dormant', 'new')
+         AND u.timezone IS NOT NULL`
     )
-    .all<{ id: string; name: string }>();
+    .all<UserWithTimezone>();
 
-  let nudgesGenerated = 0;
   let usersProcessed = 0;
-  let usersSkipped = 0;
+  let nudgesGenerated = 0;
+  let nudgesDelivered = 0;
 
   for (const user of users) {
-    try {
-      const result = await generateNudgesForUser(db, env, user.id, { weekly: false });
-      nudgesGenerated += result.nudgesCreated;
-      usersProcessed++;
+    const currentHour = getCurrentHourInTimezone(user.timezone);
 
-      if (result.nudgesCreated === 0) {
-        usersSkipped++;
+    // Skip if it's not their preferred nudge hour
+    if (currentHour !== user.preferred_nudge_hour) {
+      continue;
+    }
+
+    usersProcessed++;
+
+    try {
+      // Generate nudges
+      const isWeekly = user.subscription_tier === 'free';
+      const genResult = await generateNudgesForUser(db, env, user.id, { weekly: isWeekly });
+      nudgesGenerated += genResult.nudgesCreated;
+
+      // Immediately deliver pending nudges for this user
+      const pendingNudges = await getPendingNudges(db, 10, user.id);
+      for (const nudge of pendingNudges) {
+        const sendResult = await sendNudge(env, nudge);
+        if (sendResult.success) {
+          await markNudgeDelivered(db, nudge.id);
+          nudgesDelivered++;
+        }
       }
     } catch (err) {
-      console.error(`[cron:dailyNudge] Failed for user ${user.id}:`, err);
+      console.error(`[cron:hourlyNudge] Failed for user ${user.id}:`, err);
     }
   }
 
   return {
-    usersProcessed,
-    usersSkipped,
+    totalUsers: users.length,
+    usersAtTheirHour: usersProcessed,
     nudgesGenerated,
-    tier: 'premium/trial',
+    nudgesDelivered,
   };
 }
 
 /**
- * Weekly nudge generation for free tier users.
+ * Hourly trial reminders — timezone-aware.
  *
- * Runs Monday 3am Central. Free users get a single weekly digest message
- * listing up to 3 contacts needing attention. This provides value while
- * encouraging upgrade for daily, personalized nudges.
- *
- * Digest format:
- *   🌟 Weekly Check-in Reminder
- *   Here are 3 people who'd love to hear from you:
- *   1. Mom
- *   2. Sarah Chen
- *   3. Mike Johnson
+ * Checks trial users and sends reminders at their preferred hour.
  */
-async function weeklyNudgeGeneration(env: Env): Promise<Record<string, unknown>> {
+async function hourlyTrialReminders(env: Env): Promise<Record<string, unknown>> {
   const db = env.DB;
 
-  // Get all free tier users with at least one active contact
+  // Get trial users with timezone
   const { results: users } = await db
     .prepare(
-      `SELECT DISTINCT u.id, u.name
-       FROM users u
-       INNER JOIN contacts c ON u.id = c.user_id
-       WHERE u.subscription_tier = 'free'
-         AND c.archived = 0
-         AND c.intent NOT IN ('dormant', 'new')`
+      `SELECT id, name, timezone, preferred_nudge_hour
+       FROM users
+       WHERE subscription_tier = 'trial'
+         AND timezone IS NOT NULL`
     )
-    .all<{ id: string; name: string }>();
+    .all<UserWithTimezone>();
 
-  let nudgesGenerated = 0;
-  let usersProcessed = 0;
-  let usersSkipped = 0;
+  let usersChecked = 0;
+  let remindersSent = 0;
 
   for (const user of users) {
-    try {
-      const result = await generateNudgesForUser(db, env, user.id, { weekly: true });
-      nudgesGenerated += result.nudgesCreated;
-      usersProcessed++;
+    const currentHour = getCurrentHourInTimezone(user.timezone);
+    if (currentHour !== user.preferred_nudge_hour) {
+      continue;
+    }
 
-      if (result.nudgesCreated === 0) {
-        usersSkipped++;
+    usersChecked++;
+
+    try {
+      // Process trial reminder for this user
+      const result = await processTrialReminders(db, env, user.id);
+      if (result.usageHighlightsSent > 0 || result.upgradePromptsSent > 0) {
+        remindersSent++;
       }
     } catch (err) {
-      console.error(`[cron:weeklyNudge] Failed for user ${user.id}:`, err);
+      console.error(`[cron:hourlyTrialReminder] Failed for user ${user.id}:`, err);
     }
   }
 
   return {
-    usersProcessed,
-    usersSkipped,
-    nudgesGenerated,
-    tier: 'free',
+    totalTrialUsers: users.length,
+    usersAtTheirHour: usersChecked,
+    remindersSent,
   };
 }
 
 /**
- * Daily trial reminders for users approaching trial end.
+ * Hourly sorting check-in — timezone-aware, Monday only.
  *
- * Runs at 3am Central daily. Checks trial users and sends appropriate
- * lifecycle messages based on where they are in their trial:
- *
- *   - Day 10-12 + high engagement: Usage highlight ("You're getting good use...")
- *   - Day 12-13: Upgrade prompt with personalized stats
- *
- * Messages are personalized based on actual usage (contacts added,
- * people reconnected, etc.). Each stage is only sent once per user.
- *
- * Note: Signup welcome and expiration notices are sent synchronously
- * from signup-service.ts and subscription-service.ts respectively.
+ * Runs every hour but only processes users where:
+ *   1. It's Monday in their timezone
+ *   2. It's their preferred nudge hour
  */
-async function dailyTrialReminders(env: Env): Promise<Record<string, unknown>> {
-  const result = await processTrialReminders(env.DB, env);
-
-  return {
-    usersChecked: result.usersChecked,
-    usageHighlightsSent: result.usageHighlightsSent,
-    upgradePromptsSent: result.upgradePromptsSent,
-    skippedAlreadySent: result.skippedAlreadySent,
-    skippedLowUsage: result.skippedLowUsage,
-    errors: result.errors,
-  };
-}
-
-/**
- * Weekly sorting check-in for all users with unsorted contacts.
- *
- * Runs Monday 4am Central (1 hour after nudge generation so messages
- * are staggered). Prompts users who have contacts in the 'new' intent
- * bucket to sort them, offering either SMS-based sorting or dashboard.
- *
- * Smart offer conditions:
- *   - Only users with unsorted contacts OR contacts without clear goals
- *   - Only users who completed onboarding
- *   - Only users not offered in the last 6 days (prevents spam)
- *
- * Tier limits:
- *   - Free users: Can sort up to 5 contacts per week via SMS
- *   - Premium/trial: Unlimited sorting
- *
- * Message format:
- *   "Hey [name]! You've got [X] contacts I haven't placed yet, and [Y]
- *    without a clear goal. Want to sort through a few? You can do it
- *    here via text, or head to your dashboard: [link]"
- */
-async function weeklySortingCheckin(env: Env): Promise<Record<string, unknown>> {
-  const result = await generateSortingCheckins(env.DB, env);
-
-  return {
-    usersChecked: result.usersChecked,
-    checkInsSent: result.checkInsSent,
-    skippedNoContacts: result.skippedNoContacts,
-    skippedCooldown: result.skippedCooldown,
-    errors: result.errors,
-  };
-}
-
-/**
- * Deliver pending nudges via SMS.
- *
- * Runs at 8am Central — the "morning coffee" delivery window when
- * users are most likely to see and act on reminders.
- *
- * Process:
- *   1. Fetch all nudges with status='pending' and scheduled_for <= now
- *   2. For each nudge, send via SendBlue
- *   3. Mark as 'delivered' on success
- *   4. Leave as 'pending' on failure (will retry next run)
- *
- * Rate limiting:
- *   - Processes up to 100 nudges per run
- *   - SendBlue handles rate limiting on their end
- *   - Failed sends are retried on the next cron run
- */
-async function nudgeDelivery(env: Env): Promise<Record<string, unknown>> {
+async function hourlySortingCheckin(env: Env): Promise<Record<string, unknown>> {
   const db = env.DB;
 
-  // Get pending nudges ready to send
-  const nudges = await getPendingNudges(db, 100);
+  // Get users with unsorted contacts
+  const { results: users } = await db
+    .prepare(
+      `SELECT DISTINCT u.id, u.name, u.timezone, u.preferred_nudge_hour
+       FROM users u
+       INNER JOIN contacts c ON u.id = c.user_id
+       WHERE c.intent = 'new'
+         AND c.archived = 0
+         AND u.timezone IS NOT NULL`
+    )
+    .all<UserWithTimezone>();
 
-  let delivered = 0;
-  let failed = 0;
+  let usersChecked = 0;
+  let checkInsSent = 0;
 
-  for (const nudge of nudges) {
+  for (const user of users) {
+    // Only process on Monday at their preferred hour
+    if (!isMondayInTimezone(user.timezone)) {
+      continue;
+    }
+
+    const currentHour = getCurrentHourInTimezone(user.timezone);
+    if (currentHour !== user.preferred_nudge_hour) {
+      continue;
+    }
+
+    usersChecked++;
+
     try {
-      const result = await sendNudge(env, nudge);
-
-      if (result.success) {
-        await markNudgeDelivered(db, nudge.id);
-        delivered++;
-      } else {
-        console.error(`[cron:nudgeDelivery] Send failed for nudge ${nudge.id}:`, result.error);
-        failed++;
+      const result = await generateSortingCheckins(db, env, user.id);
+      if (result.checkInsSent > 0) {
+        checkInsSent++;
       }
     } catch (err) {
-      console.error(`[cron:nudgeDelivery] Exception for nudge ${nudge.id}:`, err);
-      failed++;
+      console.error(`[cron:hourlySorting] Failed for user ${user.id}:`, err);
     }
   }
 
   return {
-    pending: nudges.length,
-    delivered,
-    failed,
+    totalUsersWithUnsorted: users.length,
+    usersAtMondayHour: usersChecked,
+    checkInsSent,
   };
 }
+
+// ===========================================================================
+// Daily/Weekly Jobs (UTC-based)
+// ===========================================================================
 
 /**
  * Check for expired trials and downgrade to free tier.
  *
  * Runs at midnight UTC daily. This catches users whose trial expired
  * but haven't made any requests (so lazy downgrade hasn't fired).
- *
- * Also sends trial expiration notifications to each downgraded user
- * so they know their status has changed.
  */
 async function trialExpirationCheck(env: Env): Promise<Record<string, unknown>> {
   const db = env.DB;
 
-  // First, get the list of users who will be downgraded
+  // Get users who will be downgraded
   const { results: expiringUsers } = await db
     .prepare(
       `SELECT id FROM users
@@ -406,7 +389,7 @@ async function trialExpirationCheck(env: Env): Promise<Record<string, unknown>> 
   // Process the downgrades
   const result = await processExpiredTrials(db);
 
-  // Send expiration notifications to each downgraded user
+  // Send expiration notifications
   let notificationsSent = 0;
   let notificationErrors = 0;
 
@@ -430,9 +413,7 @@ async function trialExpirationCheck(env: Env): Promise<Record<string, unknown>> 
 /**
  * Clean up old usage tracking data.
  *
- * Runs at midnight UTC daily. Purges rows older than 90 days to
- * keep the usage_tracking table lean. Historical data beyond 90
- * days isn't needed for daily limit enforcement.
+ * Runs at midnight UTC daily. Purges rows older than 90 days.
  */
 async function usageDataCleanup(env: Env): Promise<Record<string, unknown>> {
   const result = await purgeOldUsageData(env.DB, 90);
@@ -442,10 +423,7 @@ async function usageDataCleanup(env: Env): Promise<Record<string, unknown>> {
 /**
  * Recalculate health statuses for all contacts.
  *
- * Runs Sunday midnight UTC weekly. Health is stored denormalized
- * on contact rows for query performance, but it can drift if no
- * interactions are logged. This ensures the dashboard always shows
- * accurate health colors.
+ * Runs Monday 6am UTC weekly. Ensures dashboard shows accurate health.
  */
 async function healthRecalculation(env: Env): Promise<Record<string, unknown>> {
   const result = await recalculateAllHealthStatuses(env.DB);
