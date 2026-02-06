@@ -2,22 +2,310 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
-  line-height: 1.5;
-  font-weight: 400;
+/* Google Fonts - Fraunces (display) and Plus Jakarta Sans (body) */
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..900;1,9..144,300..900&family=Plus+Jakarta+Sans:ital,wght@0,300..800;1,300..800&display=swap');
 
-  color-scheme: light dark;
-  color: #213547;
-  background-color: #f9fafb;
+/* ==========================================================================
+   Base Styles - Matching marketing site
+   ========================================================================== */
 
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+@layer base {
+  :root {
+    /* Color tokens for easy access in JS if needed */
+    --color-cream: #faf8f5;
+    --color-cream-dark: #f5f1eb;
+    --color-warm-white: #fefdfb;
+    --color-charcoal: #2d2a26;
+    --color-charcoal-light: #4a453d;
+    --color-terracotta: #c4705e;
+    --color-terracotta-light: #d8927f;
+    --color-terracotta-dark: #a85c4a;
+    --color-sage: #7d9b84;
+    --color-sage-light: #a8c4ae;
+    --color-golden: #c9a962;
+    --color-blush: #e8d5cf;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    font-family: 'Plus Jakarta Sans', system-ui, sans-serif;
+    background-color: var(--color-cream);
+    color: var(--color-charcoal);
+    line-height: 1.6;
+    font-weight: 400;
+    font-synthesis: none;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    min-height: 100vh;
+    margin: 0;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: 'Fraunces', Georgia, serif;
+    font-weight: 500;
+    line-height: 1.2;
+    color: var(--color-charcoal);
+  }
+
+  /* Improve focus states for accessibility */
+  :focus-visible {
+    outline: 2px solid var(--color-terracotta);
+    outline-offset: 2px;
+  }
 }
 
-body {
-  margin: 0;
-  min-height: 100vh;
+/* ==========================================================================
+   Component Styles - Reusable UI patterns
+   ========================================================================== */
+
+@layer components {
+  /* Primary Button - Terracotta with warm shadow */
+  .btn-primary {
+    @apply inline-flex items-center justify-center px-6 py-3
+           text-base font-medium text-warm-white
+           rounded-xl transition-all duration-200
+           shadow-warm hover:shadow-medium
+           transform hover:-translate-y-0.5
+           disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none;
+    background-color: var(--color-terracotta);
+  }
+
+  .btn-primary:hover:not(:disabled) {
+    background-color: var(--color-terracotta-dark);
+  }
+
+  /* Secondary Button - Outlined */
+  .btn-secondary {
+    @apply inline-flex items-center justify-center px-6 py-3
+           text-base font-medium rounded-xl
+           border-2 transition-all duration-200
+           hover:shadow-soft
+           disabled:opacity-50 disabled:cursor-not-allowed;
+    color: var(--color-terracotta);
+    border-color: var(--color-terracotta);
+    background-color: transparent;
+  }
+
+  .btn-secondary:hover:not(:disabled) {
+    background-color: var(--color-terracotta);
+    color: var(--color-warm-white);
+  }
+
+  /* Ghost Button - Minimal */
+  .btn-ghost {
+    @apply inline-flex items-center justify-center px-4 py-2
+           text-sm font-medium rounded-lg
+           transition-all duration-200;
+    color: var(--color-charcoal-light);
+  }
+
+  .btn-ghost:hover {
+    background-color: var(--color-cream-dark);
+    color: var(--color-charcoal);
+  }
+
+  /* Input Field */
+  .input-field {
+    @apply w-full px-4 py-3 rounded-xl border-2
+           text-base transition-all duration-200
+           focus:outline-none focus:ring-0;
+    background-color: var(--color-warm-white);
+    border-color: var(--color-cream-dark);
+    color: var(--color-charcoal);
+  }
+
+  .input-field:focus {
+    border-color: var(--color-terracotta);
+    box-shadow: 0 0 0 3px rgba(196, 112, 94, 0.1);
+  }
+
+  .input-field::placeholder {
+    color: var(--color-charcoal-light);
+    opacity: 0.6;
+  }
+
+  .input-field:disabled {
+    background-color: var(--color-cream-dark);
+    opacity: 0.7;
+    cursor: not-allowed;
+  }
+
+  /* Card */
+  .card {
+    @apply rounded-2xl p-6 shadow-soft;
+    background-color: var(--color-warm-white);
+  }
+
+  .card-header {
+    @apply pb-4 mb-4 border-b;
+    border-color: var(--color-cream-dark);
+  }
+
+  /* Badge styles */
+  .badge {
+    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium;
+  }
+
+  .badge-primary {
+    @apply badge;
+    background-color: rgba(196, 112, 94, 0.15);
+    color: var(--color-terracotta-dark);
+  }
+
+  .badge-success {
+    @apply badge;
+    background-color: rgba(125, 155, 132, 0.15);
+    color: #47634e;
+  }
+
+  .badge-warning {
+    @apply badge;
+    background-color: rgba(201, 169, 98, 0.15);
+    color: #9e7932;
+  }
+
+  .badge-neutral {
+    @apply badge;
+    background-color: var(--color-cream-dark);
+    color: var(--color-charcoal-light);
+  }
+
+  /* Section headings */
+  .section-heading {
+    @apply text-3xl md:text-4xl mb-4;
+    font-family: 'Fraunces', Georgia, serif;
+    color: var(--color-charcoal);
+  }
+
+  .section-subheading {
+    @apply text-lg md:text-xl;
+    color: var(--color-charcoal-light);
+  }
+
+  /* Sidebar nav item */
+  .nav-item {
+    @apply flex items-center gap-3 px-3 py-2 rounded-xl text-sm font-medium transition-colors;
+    color: var(--color-charcoal-light);
+  }
+
+  .nav-item:hover {
+    background-color: var(--color-cream-dark);
+    color: var(--color-charcoal);
+  }
+
+  .nav-item.active {
+    background-color: rgba(196, 112, 94, 0.1);
+    color: var(--color-terracotta-dark);
+  }
+}
+
+/* ==========================================================================
+   Utility Overrides
+   ========================================================================== */
+
+@layer utilities {
+  /* Text colors using CSS variables */
+  .text-charcoal {
+    color: var(--color-charcoal);
+  }
+
+  .text-charcoal-light {
+    color: var(--color-charcoal-light);
+  }
+
+  .text-terracotta {
+    color: var(--color-terracotta);
+  }
+
+  /* Background colors using CSS variables */
+  .bg-cream {
+    background-color: var(--color-cream);
+  }
+
+  .bg-cream-dark {
+    background-color: var(--color-cream-dark);
+  }
+
+  .bg-warm-white {
+    background-color: var(--color-warm-white);
+  }
+
+  /* Animations matching marketing site */
+  .animate-fade-up {
+    animation: fadeUp 0.6s ease-out forwards;
+  }
+
+  .animate-fade-in {
+    animation: fadeIn 0.4s ease-out forwards;
+  }
+}
+
+@keyframes fadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* ==========================================================================
+   Form Validation States
+   ========================================================================== */
+
+.input-error {
+  border-color: #dc2626 !important;
+}
+
+.error-message {
+  color: #dc2626;
+  font-size: 0.875rem;
+  margin-top: 0.5rem;
+}
+
+/* Checkbox custom styling */
+input[type="checkbox"] {
+  accent-color: var(--color-terracotta);
+  width: 1.125rem;
+  height: 1.125rem;
+}
+
+/* Phone input styling */
+input[type="tel"] {
+  letter-spacing: 0.02em;
+}
+
+/* ==========================================================================
+   Scrollbar Styling (optional, for webkit browsers)
+   ========================================================================== */
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--color-cream-dark);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-charcoal-light);
+  border-radius: 4px;
+  opacity: 0.5;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  opacity: 0.7;
 }
