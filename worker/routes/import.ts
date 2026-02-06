@@ -4,21 +4,24 @@
  * Handles:
  *   - CSV file upload and parsing
  *   - vCard (.vcf) file upload and parsing
- *   - Bulk contact creation from imports
+ *   - Bulk contact creation from CSV/vCard
  *   - Triggering the guided import flow (via bulk-import-flow.ts)
  *   - Batch operations for imported contacts
  *
  * Entry points:
  *
- *   POST /api/import/upload           — Upload and parse CSV or vCard
- *   POST /api/import/csv              — Upload and parse CSV (legacy)
+ *   POST /api/import/csv              — Upload and parse CSV or vCard
  *   POST /api/import/start-flow       — Trigger Bethany's guided organization
  *   GET  /api/import/status           — Get current import flow state
  *   POST /api/import/batch-assign     — Assign multiple contacts to circle
  *
- * Supported Formats:
- *   - CSV: name (required), phone, email, notes
- *   - vCard: VCF 3.0/4.0 with FN, TEL, EMAIL, NOTE fields
+ * CSV Format Expected:
+ *   name (required), phone, email, notes
+ *   Flexible headers — will match common variations
+ *
+ * vCard Format Expected:
+ *   VCF 3.0/4.0 with BEGIN:VCARD / END:VCARD blocks
+ *   Extracts: FN (full name), TEL (phone), EMAIL, NOTE
  *
  * @see worker/services/bulk-import-flow.ts for conversation flow
  */
@@ -47,7 +50,7 @@ interface ParsedContact {
   notes?: string;
 }
 
-interface ParseResult {
+interface CsvParseResult {
   valid: ParsedContact[];
   invalid: Array<{ row: number; reason: string; data: Record<string, string> }>;
   duplicates: Array<{ name: string; existingId: string }>;
@@ -76,12 +79,7 @@ export async function handleImportRoute(
   const method = request.method;
 
   try {
-    // POST /api/import/upload — Upload and process CSV or vCard
-    if (path === '/api/import/upload' && method === 'POST') {
-      return handleFileUpload(request, env, user);
-    }
-
-    // POST /api/import/csv — Upload and process CSV (legacy endpoint)
+    // POST /api/import/csv — Upload and process CSV or vCard
     if (path === '/api/import/csv' && method === 'POST') {
       return handleFileUpload(request, env, user);
     }
@@ -114,14 +112,13 @@ export async function handleImportRoute(
 }
 
 // ===========================================================================
-// File Upload Handler
+// File Upload Handler (CSV + vCard)
 // ===========================================================================
 
 /**
- * Handle file upload (CSV or vCard).
+ * Handle file upload — detects CSV vs vCard and routes accordingly.
  *
  * Accepts multipart form data with a 'file' field.
- * Detects file type and routes to appropriate parser.
  */
 async function handleFileUpload(
   request: Request,
@@ -143,45 +140,44 @@ async function handleFileUpload(
     const fileName = file.name.toLowerCase();
     const sendSms = formData.get('sendSms') === 'true';
 
-    // Detect file type
-    if (fileName.endsWith('.vcf') || fileText.trim().startsWith('BEGIN:VCARD')) {
+    // Detect file type by extension or content
+    if (fileName.endsWith('.vcf') || fileName.endsWith('.vcard') || isVCardContent(fileText)) {
       return processVCardText(fileText, env, user, sendSms);
-    } else {
-      return processCsvText(fileText, env, user, sendSms);
     }
+
+    return processCsvText(fileText, env, user, sendSms);
   }
 
-  // Handle raw text (assume CSV for backwards compatibility)
+  // Handle raw CSV text (backwards compatible)
   if (contentType.includes('text/csv') || contentType.includes('text/plain')) {
     const text = await request.text();
-    
-    // Check if it's actually a vCard
-    if (text.trim().startsWith('BEGIN:VCARD')) {
-      return processVCardText(text, env, user, false);
-    }
     return processCsvText(text, env, user, false);
   }
 
-  // Handle text/vcard
+  // Handle vCard content type
   if (contentType.includes('text/vcard') || contentType.includes('text/x-vcard')) {
-    const vcfText = await request.text();
-    return processVCardText(vcfText, env, user, false);
+    const text = await request.text();
+    return processVCardText(text, env, user, false);
   }
 
-  // Handle JSON with content
+  // Handle JSON with CSV content (backwards compatible)
   if (contentType.includes('application/json')) {
-    const body = await request.json<{ csv?: string; vcf?: string; sendSms?: boolean }>();
-    
-    if (body.vcf) {
-      return processVCardText(body.vcf, env, user, body.sendSms ?? false);
+    const body = await request.json<{ csv: string; sendSms?: boolean }>();
+    if (!body.csv) {
+      return errorResponse('Missing csv field', 400);
     }
-    if (body.csv) {
-      return processCsvText(body.csv, env, user, body.sendSms ?? false);
-    }
-    return errorResponse('Missing csv or vcf field', 400);
+    return processCsvText(body.csv, env, user, body.sendSms ?? false);
   }
 
   return errorResponse('Unsupported content type. Use multipart/form-data, text/csv, text/vcard, or application/json', 400);
+}
+
+/**
+ * Quick check if text content looks like a vCard file.
+ */
+function isVCardContent(text: string): boolean {
+  const trimmed = text.trim();
+  return trimmed.startsWith('BEGIN:VCARD');
 }
 
 // ===========================================================================
@@ -197,7 +193,6 @@ async function processVCardText(
   user: UserRow,
   sendSms: boolean,
 ): Promise<Response> {
-  // Parse vCard
   const parseResult = parseVCard(vcfText);
 
   if (parseResult.valid.length === 0) {
@@ -208,7 +203,6 @@ async function processVCardText(
         invalidRows: parseResult.invalid.length,
         errors: parseResult.invalid.slice(0, 10),
         message: 'No valid contacts found in vCard file',
-        format: 'vcard',
       },
     }, 400);
   }
@@ -261,173 +255,157 @@ async function processVCardText(
       ...result,
       flowMessage,
       errors: parseResult.invalid.slice(0, 10),
-      format: 'vcard',
     },
   }, 201);
 }
 
 /**
- * Parse vCard (VCF) text into contact objects.
+ * Parse vCard (VCF 3.0/4.0) text into contact objects.
  *
- * Supports:
- * - VCF 3.0 and 4.0 formats
- * - Multiple contacts in one file (multiple BEGIN:VCARD blocks)
- * - FN (full name), TEL (phone), EMAIL, NOTE fields
+ * Handles:
+ * - Multiple BEGIN:VCARD / END:VCARD blocks
+ * - FN (formatted name), N (structured name fallback)
+ * - TEL with TYPE parameters (CELL, WORK, HOME, etc.)
+ * - EMAIL
+ * - NOTE
  * - QUOTED-PRINTABLE encoding
- * - Line folding (continued lines starting with space/tab)
+ * - Folded lines (continuation lines starting with space/tab)
+ * - UTF-8 encoded content
  */
-function parseVCard(vcfText: string): ParseResult {
+function parseVCard(vcfText: string): CsvParseResult {
   const valid: ParsedContact[] = [];
-  const invalid: ParseResult['invalid'] = [];
+  const invalid: CsvParseResult['invalid'] = [];
 
-  // Normalize line endings and unfold continued lines
-  const normalized = vcfText
-    .replace(/\r\n/g, '\n')
-    .replace(/\r/g, '\n')
-    .replace(/\n[ \t]/g, ''); // Unfold continued lines
+  // Unfold continuation lines (RFC 2425: lines starting with space/tab
+  // are continuations of the previous line)
+  const unfolded = vcfText.replace(/\r?\n[ \t]/g, '');
 
-  // Split into individual vCards
-  const vCardBlocks = normalized.split(/(?=BEGIN:VCARD)/i).filter(block => 
-    block.trim().toUpperCase().startsWith('BEGIN:VCARD')
-  );
+  // Split into individual vCard blocks
+  const blocks = unfolded.split(/(?=BEGIN:VCARD)/i);
+  let blockIndex = 0;
 
-  if (vCardBlocks.length === 0) {
-    invalid.push({
-      row: 1,
-      reason: 'No valid vCard blocks found',
-      data: { content: vcfText.substring(0, 100) },
-    });
-    return { valid, invalid, duplicates: [] };
-  }
+  for (const block of blocks) {
+    const trimmed = block.trim();
+    if (!trimmed.startsWith('BEGIN:VCARD')) continue;
 
-  // Parse each vCard block
-  vCardBlocks.forEach((block, index) => {
-    const contact = parseVCardBlock(block);
-    
-    if (contact.name) {
-      valid.push(contact);
-    } else {
-      invalid.push({
-        row: index + 1,
-        reason: 'Missing name (FN field)',
-        data: { block: block.substring(0, 200) },
-      });
+    blockIndex++;
+    const lines = trimmed.split(/\r?\n/);
+
+    let name = '';
+    let phone = '';
+    let email = '';
+    let notes = '';
+    let structuredName = '';
+
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+      if (!line || line === 'BEGIN:VCARD' || line === 'END:VCARD') continue;
+      if (line.startsWith('VERSION:')) continue;
+
+      // Parse property: handle parameters (e.g., TEL;TYPE=CELL:+1555...)
+      const colonIdx = line.indexOf(':');
+      if (colonIdx === -1) continue;
+
+      const propertyPart = line.substring(0, colonIdx);
+      let value = line.substring(colonIdx + 1).trim();
+
+      // Extract property name (before any ;params)
+      const semiIdx = propertyPart.indexOf(';');
+      const propName = (semiIdx >= 0 ? propertyPart.substring(0, semiIdx) : propertyPart)
+        .toUpperCase();
+      const params = semiIdx >= 0 ? propertyPart.substring(semiIdx + 1).toUpperCase() : '';
+
+      // Decode QUOTED-PRINTABLE if needed
+      if (params.includes('ENCODING=QUOTED-PRINTABLE')) {
+        value = decodeQuotedPrintable(value);
+      }
+
+      // Remove escaped characters common in vCard
+      value = value.replace(/\\n/gi, ' ').replace(/\\,/g, ',').replace(/\\;/g, ';').replace(/\\\\/g, '\\');
+
+      switch (propName) {
+        case 'FN':
+          // Formatted name — preferred
+          name = value.trim();
+          break;
+
+        case 'N':
+          // Structured name: Last;First;Middle;Prefix;Suffix
+          // Use as fallback if no FN
+          const parts = value.split(';');
+          const lastName = (parts[0] || '').trim();
+          const firstName = (parts[1] || '').trim();
+          const middleName = (parts[2] || '').trim();
+          structuredName = [firstName, middleName, lastName].filter(Boolean).join(' ');
+          break;
+
+        case 'TEL':
+          // Take first phone (prefer CELL/MOBILE, but accept any)
+          if (!phone || params.includes('CELL') || params.includes('MOBILE') || params.includes('IPHONE')) {
+            phone = value.trim();
+          }
+          break;
+
+        case 'EMAIL':
+          // Take first email
+          if (!email) {
+            email = value.trim();
+          }
+          break;
+
+        case 'NOTE':
+          notes = value.trim();
+          break;
+      }
     }
-  });
+
+    // Use structured name as fallback
+    if (!name && structuredName) {
+      name = structuredName;
+    }
+
+    // Validate
+    if (!name) {
+      invalid.push({
+        row: blockIndex,
+        reason: 'No name found (missing FN and N properties)',
+        data: { block: trimmed.substring(0, 200) },
+      });
+      continue;
+    }
+
+    valid.push({
+      name,
+      phone: normalizePhone(phone) || undefined,
+      email: email || undefined,
+      notes: notes || undefined,
+    });
+  }
 
   return { valid, invalid, duplicates: [] };
 }
 
 /**
- * Parse a single vCard block into a contact.
+ * Decode QUOTED-PRINTABLE encoded string.
+ *
+ * Handles:
+ * - =XX hex sequences
+ * - Soft line breaks (trailing =)
  */
-function parseVCardBlock(block: string): ParsedContact {
-  const lines = block.split('\n');
-  
-  let name = '';
-  let phone: string | undefined;
-  let email: string | undefined;
-  let notes: string | undefined;
+function decodeQuotedPrintable(input: string): string {
+  // Remove soft line breaks
+  let result = input.replace(/=\r?\n/g, '');
 
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed === 'BEGIN:VCARD' || trimmed === 'END:VCARD') {
-      continue;
-    }
+  // Decode =XX sequences
+  result = result.replace(/=([0-9A-Fa-f]{2})/g, (_, hex) => {
+    return String.fromCharCode(parseInt(hex, 16));
+  });
 
-    // Split into property name and value
-    const colonIndex = trimmed.indexOf(':');
-    if (colonIndex === -1) continue;
-
-    const propertyPart = trimmed.substring(0, colonIndex).toUpperCase();
-    let value = trimmed.substring(colonIndex + 1);
-
-    // Extract base property name (before any parameters like ;TYPE=)
-    const propertyName = propertyPart.split(';')[0];
-
-    // Decode value if needed
-    if (propertyPart.includes('ENCODING=QUOTED-PRINTABLE')) {
-      value = decodeQuotedPrintable(value);
-    }
-
-    // Handle different properties
-    switch (propertyName) {
-      case 'FN':
-        // Full name - primary name field
-        name = value.trim();
-        break;
-
-      case 'N':
-        // Structured name (fallback if no FN)
-        // Format: Last;First;Middle;Prefix;Suffix
-        if (!name) {
-          const parts = value.split(';').map(p => p.trim()).filter(Boolean);
-          if (parts.length >= 2) {
-            // Typically: Last;First
-            name = `${parts[1]} ${parts[0]}`.trim();
-          } else if (parts.length === 1) {
-            name = parts[0];
-          }
-        }
-        break;
-
-      case 'TEL':
-        // Phone number - take first one if multiple
-        if (!phone) {
-          phone = normalizePhone(value);
-        }
-        break;
-
-      case 'EMAIL':
-        // Email - take first one if multiple
-        if (!email) {
-          email = value.trim();
-        }
-        break;
-
-      case 'NOTE':
-        // Notes
-        notes = value.trim();
-        break;
-
-      case 'ORG':
-        // Organization - append to notes
-        if (value.trim()) {
-          notes = notes 
-            ? `${notes}; Company: ${value.trim()}`
-            : `Company: ${value.trim()}`;
-        }
-        break;
-
-      case 'TITLE':
-        // Job title - append to notes
-        if (value.trim()) {
-          notes = notes
-            ? `${notes}; Title: ${value.trim()}`
-            : `Title: ${value.trim()}`;
-        }
-        break;
-    }
-  }
-
-  return { name, phone, email, notes };
-}
-
-/**
- * Decode QUOTED-PRINTABLE encoded text.
- */
-function decodeQuotedPrintable(text: string): string {
-  return text
-    // Handle soft line breaks
-    .replace(/=\n/g, '')
-    // Decode hex-encoded characters
-    .replace(/=([0-9A-Fa-f]{2})/g, (_, hex) => 
-      String.fromCharCode(parseInt(hex, 16))
-    );
+  return result;
 }
 
 // ===========================================================================
-// CSV Processing
+// CSV Processing (unchanged)
 // ===========================================================================
 
 /**
@@ -448,9 +426,8 @@ async function processCsvText(
         imported: 0,
         duplicatesSkipped: 0,
         invalidRows: parseResult.invalid.length,
-        errors: parseResult.invalid.slice(0, 10),
+        errors: parseResult.invalid.slice(0, 10), // First 10 errors
         message: 'No valid contacts found in CSV',
-        format: 'csv',
       },
     }, 400);
   }
@@ -503,141 +480,8 @@ async function processCsvText(
       ...result,
       flowMessage,
       errors: parseResult.invalid.slice(0, 10),
-      format: 'csv',
     },
   }, 201);
-}
-
-/**
- * Parse CSV text into contact objects.
- *
- * Handles:
- * - Various header formats (Name, name, NAME, Full Name, etc.)
- * - Quoted fields with commas
- * - Empty rows
- * - Missing required fields
- */
-function parseCsv(csvText: string): ParseResult {
-  const lines = csvText.split(/\r?\n/).filter(line => line.trim());
-  
-  if (lines.length < 2) {
-    return { valid: [], invalid: [], duplicates: [] };
-  }
-
-  // Parse header row
-  const headers = parseRow(lines[0]).map(h => normalizeHeader(h));
-  
-  // Find column indices
-  const nameCol = findColumn(headers, ['name', 'full name', 'fullname', 'contact', 'person']);
-  const phoneCol = findColumn(headers, ['phone', 'mobile', 'cell', 'telephone', 'phone number']);
-  const emailCol = findColumn(headers, ['email', 'e-mail', 'mail', 'email address']);
-  const notesCol = findColumn(headers, ['notes', 'note', 'comments', 'comment', 'description']);
-
-  if (nameCol === -1) {
-    return {
-      valid: [],
-      invalid: [{ row: 1, reason: 'No name column found in header', data: { header: lines[0] } }],
-      duplicates: [],
-    };
-  }
-
-  const valid: ParsedContact[] = [];
-  const invalid: ParseResult['invalid'] = [];
-
-  // Parse data rows
-  for (let i = 1; i < lines.length; i++) {
-    const row = parseRow(lines[i]);
-    const rowData: Record<string, string> = {};
-    headers.forEach((h, idx) => { rowData[h] = row[idx] || ''; });
-
-    const name = row[nameCol]?.trim();
-    if (!name) {
-      invalid.push({ row: i + 1, reason: 'Missing name', data: rowData });
-      continue;
-    }
-
-    valid.push({
-      name,
-      phone: phoneCol >= 0 ? normalizePhone(row[phoneCol]) : undefined,
-      email: emailCol >= 0 ? row[emailCol]?.trim() || undefined : undefined,
-      notes: notesCol >= 0 ? row[notesCol]?.trim() || undefined : undefined,
-    });
-  }
-
-  return { valid, invalid, duplicates: [] };
-}
-
-/**
- * Parse a CSV row, handling quoted fields.
- */
-function parseRow(line: string): string[] {
-  const result: string[] = [];
-  let current = '';
-  let inQuotes = false;
-
-  for (let i = 0; i < line.length; i++) {
-    const char = line[i];
-
-    if (char === '"') {
-      if (inQuotes && line[i + 1] === '"') {
-        current += '"';
-        i++;
-      } else {
-        inQuotes = !inQuotes;
-      }
-    } else if (char === ',' && !inQuotes) {
-      result.push(current.trim());
-      current = '';
-    } else {
-      current += char;
-    }
-  }
-
-  result.push(current.trim());
-  return result;
-}
-
-/**
- * Normalize a header string for matching.
- */
-function normalizeHeader(header: string): string {
-  return header.toLowerCase().replace(/[^a-z0-9]/g, ' ').trim();
-}
-
-/**
- * Find a column index by matching against multiple possible names.
- */
-function findColumn(headers: string[], names: string[]): number {
-  for (const name of names) {
-    const idx = headers.findIndex(h => h.includes(name));
-    if (idx >= 0) return idx;
-  }
-  return -1;
-}
-
-/**
- * Normalize a phone number (basic cleanup).
- */
-function normalizePhone(phone: string | undefined): string | undefined {
-  if (!phone) return undefined;
-  
-  // Strip non-digits except leading +
-  let cleaned = phone.trim();
-  const hasPlus = cleaned.startsWith('+');
-  cleaned = cleaned.replace(/[^\d]/g, '');
-  
-  if (!cleaned) return undefined;
-  
-  // Add country code if needed
-  if (cleaned.length === 10) {
-    return '+1' + cleaned;
-  } else if (cleaned.length === 11 && cleaned.startsWith('1')) {
-    return '+' + cleaned;
-  } else if (hasPlus) {
-    return '+' + cleaned;
-  }
-  
-  return cleaned;
 }
 
 // ===========================================================================
@@ -735,6 +579,142 @@ async function handleBatchAssign(
   );
 
   return jsonResponse({ data: result });
+}
+
+// ===========================================================================
+// CSV Parsing
+// ===========================================================================
+
+/**
+ * Parse CSV text into contact objects.
+ *
+ * Handles:
+ * - Various header formats (Name, name, NAME, Full Name, etc.)
+ * - Quoted fields with commas
+ * - Empty rows
+ * - Missing required fields
+ */
+function parseCsv(csvText: string): CsvParseResult {
+  const lines = csvText.split(/\r?\n/).filter(line => line.trim());
+  
+  if (lines.length < 2) {
+    return { valid: [], invalid: [], duplicates: [] };
+  }
+
+  // Parse header row
+  const headers = parseRow(lines[0]).map(h => normalizeHeader(h));
+  
+  // Find column indices
+  const nameCol = findColumn(headers, ['name', 'full name', 'fullname', 'contact', 'person']);
+  const phoneCol = findColumn(headers, ['phone', 'mobile', 'cell', 'telephone', 'phone number']);
+  const emailCol = findColumn(headers, ['email', 'e-mail', 'mail', 'email address']);
+  const notesCol = findColumn(headers, ['notes', 'note', 'comments', 'comment', 'description']);
+
+  if (nameCol === -1) {
+    return {
+      valid: [],
+      invalid: [{ row: 1, reason: 'No name column found in header', data: { header: lines[0] } }],
+      duplicates: [],
+    };
+  }
+
+  const valid: ParsedContact[] = [];
+  const invalid: CsvParseResult['invalid'] = [];
+
+  // Parse data rows
+  for (let i = 1; i < lines.length; i++) {
+    const row = parseRow(lines[i]);
+    const rowData: Record<string, string> = {};
+    headers.forEach((h, idx) => { rowData[h] = row[idx] || ''; });
+
+    const name = row[nameCol]?.trim();
+    if (!name) {
+      invalid.push({ row: i + 1, reason: 'Missing name', data: rowData });
+      continue;
+    }
+
+    valid.push({
+      name,
+      phone: phoneCol >= 0 ? normalizePhone(row[phoneCol]) : undefined,
+      email: emailCol >= 0 ? row[emailCol]?.trim() || undefined : undefined,
+      notes: notesCol >= 0 ? row[notesCol]?.trim() || undefined : undefined,
+    });
+  }
+
+  return { valid, invalid, duplicates: [] };
+}
+
+/**
+ * Parse a CSV row, handling quoted fields.
+ */
+function parseRow(line: string): string[] {
+  const result: string[] = [];
+  let current = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i];
+
+    if (char === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        current += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (char === ',' && !inQuotes) {
+      result.push(current.trim());
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+
+  result.push(current.trim());
+  return result;
+}
+
+/**
+ * Normalize a header string for matching.
+ */
+function normalizeHeader(header: string): string {
+  return header.toLowerCase().replace(/[^a-z0-9]/g, ' ').trim();
+}
+
+/**
+ * Find a column index by matching against multiple possible names.
+ */
+function findColumn(headers: string[], names: string[]): number {
+  for (const name of names) {
+    const idx = headers.findIndex(h => h.includes(name));
+    if (idx >= 0) return idx;
+  }
+  return -1;
+}
+
+/**
+ * Normalize a phone number (basic cleanup).
+ */
+function normalizePhone(phone: string | undefined): string | undefined {
+  if (!phone) return undefined;
+  
+  // Strip non-digits except leading +
+  let cleaned = phone.trim();
+  const hasPlus = cleaned.startsWith('+');
+  cleaned = cleaned.replace(/[^\d]/g, '');
+  
+  if (!cleaned) return undefined;
+  
+  // Add country code if needed
+  if (cleaned.length === 10) {
+    return '+1' + cleaned;
+  } else if (cleaned.length === 11 && cleaned.startsWith('1')) {
+    return '+' + cleaned;
+  } else if (hasPlus) {
+    return '+' + cleaned;
+  }
+  
+  return cleaned;
 }
 
 // ===========================================================================
