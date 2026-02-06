@@ -174,16 +174,20 @@ export type CircleType =
 /**
  * Onboarding conversation stages — post-signup SMS flow state machine.
  *
- * Flow: web signup → Bethany sends intro → user replies → conversation
+ * Discovery-first flow: web signup → intro → discovery → path recommendation → action
  *
  * @see worker/services/onboarding-service.ts for the full state machine
+ * @see docs/bethany-onboarding-kb.md for the knowledge base
  */
 export type OnboardingStage =
-  | 'intro_sent'        // Bethany's welcome message delivered after web signup
-  | 'user_replies'      // User responded, getting to know them
-  | 'learn_circles'     // Identifying key relationships and groups
-  | 'explain_features'  // Showing what Bethany can do
-  | 'ready';            // Onboarding complete, user is active
+  | 'intro_sent'           // Bethany's welcome message delivered after web signup
+  | 'user_replies'         // User responded, initial warmth
+  | 'network_discovery'    // Ask about network size, where contacts live
+  | 'path_recommendation'  // Recommend import vs manual based on answers
+  | 'guided_action'        // Walk through import OR collect names
+  | 'learn_circles'        // Identifying key relationships and groups
+  | 'explain_features'     // Showing what Bethany can do
+  | 'ready';               // Onboarding complete, user is active
 
 /**
  * Trial reminder stages — lifecycle messaging touchpoints.
