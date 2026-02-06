@@ -3,6 +3,9 @@ main = "worker/index.ts"
 compatibility_date = "2025-01-01"
 compatibility_flags = ["nodejs_compat"]
 
+# Required for Durable Objects
+preview_urls = false
+
 # D1 Database — contact graph, users, interactions
 [[d1_databases]]
 binding = "DB"
@@ -46,19 +49,13 @@ new_sqlite_classes = ["OnboardingDO", "UserDiscoveryDO", "NudgeContextDO", "Inte
 # ===========================================================================
 # Cron Triggers — Scheduled Jobs
 # ===========================================================================
-#
-# Hourly trigger handles timezone-aware delivery.
-# Other triggers for batch processing at fixed UTC times.
-#
-# @see worker/cron/scheduled.ts for job implementations
-# ===========================================================================
 [triggers]
 crons = [
-  "0 * * * *",   # Hourly: timezone-aware nudge generation & delivery
-  "0 9 * * *",   # 9am UTC: daily trial reminders (fallback for users without timezone)
-  "0 10 * * 1",  # Monday 10am UTC: weekly sorting check-in (fallback)
-  "0 0 * * *",   # Midnight UTC: trial expiration + usage cleanup
-  "0 6 * * 1",   # Monday 6am UTC: weekly health recalculation
+  "0 * * * *",
+  "0 9 * * *",
+  "0 10 * * 1",
+  "0 0 * * *",
+  "0 6 * * 1",
 ]
 
 [vars]
