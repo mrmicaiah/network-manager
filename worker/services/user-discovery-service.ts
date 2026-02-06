@@ -537,6 +537,16 @@ async function generateSignupLink(
 // ===========================================================================
 
 /**
+ * Format people discussed for prompt context.
+ */
+function formatPeopleDiscussed(people: DiscoveryConversationState['peopleDiscussed']): string {
+  if (people.length === 0) return 'None yet';
+  return people
+    .map(p => `${p.name} (${p.relationship || 'unknown relationship'})`)
+    .join(', ');
+}
+
+/**
  * Generate Bethany's response for the current discovery stage.
  */
 async function generateBethanyResponse(
@@ -544,6 +554,7 @@ async function generateBethanyResponse(
   state: DiscoveryConversationState,
 ): Promise<string> {
   const stagePrompt = STAGE_PROMPTS[state.stage];
+  const peopleStr = formatPeopleDiscussed(state.peopleDiscussed);
 
   const systemPrompt = `
     You are Bethany — a romance novelist who also helps people manage their
@@ -553,7 +564,7 @@ async function generateBethanyResponse(
     Their name: ${state.name ?? 'Unknown'}
     What they do: ${state.whatTheyDo ?? 'Unknown'}
     Circles discussed: ${JSON.stringify(state.circlesDiscussed)}
-    People discussed: ${JSON.stringify(state.peopleDiscussed.map(p => `${p.name} (${p.relationship || 'unknown relationship'})`).join(', ') || 'None yet'}
+    People discussed: ${peopleStr}
     Pain points: ${JSON.stringify(state.painPoints)}
     
     STAGE GUIDANCE:
