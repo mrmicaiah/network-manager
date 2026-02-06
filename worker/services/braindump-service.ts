@@ -9,7 +9,7 @@
  *   "Had lunch with Jake last week, talked about startups"
  *   "Mom - call every Sunday. Birthday in March."
  *
- * Uses Claude Haiku for cost-efficiency since this runs frequently.
+ * Uses Claude Sonnet 4 for quality extraction without overkill.
  *
  * @see dashboard/src/pages/BraindumpPage.tsx for the frontend
  * @see shared/models.ts for BraindumpExtraction type
@@ -22,8 +22,8 @@ import type { IntentType, InteractionMethod, BraindumpExtraction } from '../../s
 // Configuration
 // ===========================================================================
 
-/** Model to use for parsing — Haiku for cost efficiency */
-const PARSING_MODEL = 'claude-3-5-haiku-20241022';
+/** Model to use for parsing — Sonnet 4 for quality without overkill */
+const PARSING_MODEL = 'claude-sonnet-4-20250514';
 
 /** Max tokens for the response */
 const MAX_TOKENS = 2000;
