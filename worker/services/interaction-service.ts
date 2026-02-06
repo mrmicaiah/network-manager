@@ -8,6 +8,7 @@
  *   1. Creates an InteractionRow in the interactions table
  *   2. Updates the contact's last_contact_date and recalculates health
  *      via touchContactDate() from contact-service
+ *   3. Recalculates circle scores if the contact is in circles
  *
  * This is the service that keeps the relationship health system alive.
  * Without interactions being logged, contacts drift to yellow → red and
@@ -32,6 +33,15 @@
  *     logged_via: 'sms',
  *   });
  *
+ *   // Log interaction for specific circles (two hats problem)
+ *   await logInteraction(db, userId, {
+ *     contact_id: brotherContactId,
+ *     method: 'call',
+ *     summary: 'Discussed Dad\'s birthday and the Johnson lead',
+ *     circle_context: ['family-circle-id', 'work-circle-id'],
+ *     logged_via: 'dashboard',
+ *   });
+ *
  *   // Dashboard timeline for a contact
  *   const history = await getInteractionHistory(db, userId, momContactId, 20);
  *
@@ -40,6 +50,8 @@
  *
  * @see shared/models.ts for InteractionRow, LogInteractionInput, InteractionMethod
  * @see worker/services/contact-service.ts for touchContactDate()
+ * @see worker/services/score-service.ts for updateContactScores()
+ * @see docs/dartboard-system-design.md for the two hats problem
  */
 
 import type {
@@ -48,6 +60,7 @@ import type {
   InteractionMethod,
 } from '../../shared/models';
 import { touchContactDate } from './contact-service';
+import { updateContactScores } from './score-service';
 
 // ===========================================================================
 // Types
@@ -59,6 +72,14 @@ import { touchContactDate } from './contact-service';
  */
 export interface InteractionWithContact extends InteractionRow {
   contact_name: string;
+}
+
+/**
+ * Interaction with circle context resolved.
+ * Used by contact detail page to show which circles the interaction counted toward.
+ */
+export interface InteractionWithCircles extends InteractionRow {
+  circle_names: string[];  // Empty array if counts for all circles
 }
 
 /**
@@ -88,18 +109,24 @@ export interface InteractionStats {
  *
  * This is the primary write path. It:
  *   1. Validates the contact belongs to the user
- *   2. Creates the interaction row
+ *   2. Creates the interaction row with optional circle_context
  *   3. Calls touchContactDate() to update last_contact_date and
  *      recalculate health_status on the contact
+ *   4. Calls updateContactScores() to recalculate circle scores
  *
  * The date field defaults to now if not provided. If a past date is
  * provided (e.g., "I called her yesterday"), touchContactDate() only
  * updates last_contact_date if the new date is more recent than the
  * existing value.
  *
+ * Circle Context:
+ *   - null = counts for ALL circles the contact belongs to (default)
+ *   - [] = counts for NO circles (shouldn't happen normally)
+ *   - ['circle-id-1', 'circle-id-2'] = counts for specific circles only
+ *
  * @param db     - D1 database binding
  * @param userId - The owning user's ID
- * @param input  - Interaction details
+ * @param input  - Interaction details including optional circle_context
  * @param now    - Override current time (for testing)
  * @returns The created interaction, or null if the contact wasn't found
  */
@@ -120,13 +147,19 @@ export async function logInteraction(
   const id = crypto.randomUUID();
   const interactionDate = input.date ?? (now ?? new Date()).toISOString();
   const loggedVia = input.logged_via ?? 'dashboard';
+  
+  // Serialize circle_context to JSON or null
+  // null = counts for all circles, array = specific circles only
+  const circleContextJson = input.circle_context && input.circle_context.length > 0
+    ? JSON.stringify(input.circle_context)
+    : null;
 
-  // Create the interaction row
+  // Create the interaction row with circle_context
   await db
     .prepare(
       `INSERT INTO interactions
-         (id, user_id, contact_id, date, method, summary, logged_via, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))`
+         (id, user_id, contact_id, date, method, summary, logged_via, circle_context, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`
     )
     .bind(
       id,
@@ -136,11 +169,21 @@ export async function logInteraction(
       input.method,
       input.summary ?? null,
       loggedVia,
+      circleContextJson,
     )
     .run();
 
   // Update the contact's last_contact_date and recalculate health
   await touchContactDate(db, userId, input.contact_id, interactionDate, now);
+
+  // Recalculate circle scores for affected circles
+  // This updates the cached scores used by the dartboard
+  try {
+    await updateContactScores(db, input.contact_id);
+  } catch (err) {
+    // Log but don't fail the interaction - scores can be recalculated later
+    console.error(`[interaction] Failed to update scores for contact ${input.contact_id}:`, err);
+  }
 
   // Return the created row
   return db
@@ -154,7 +197,7 @@ export async function logInteraction(
  *
  * Used by braindump processing and import flows where multiple
  * interactions are extracted at once. Each interaction still triggers
- * a touchContactDate() call.
+ * a touchContactDate() call and score update.
  *
  * @param db     - D1 database binding
  * @param userId - The owning user's ID
@@ -190,8 +233,8 @@ export async function logInteractionBatch(
 /**
  * Get interaction history for a specific contact, newest first.
  *
- * This is the contact detail timeline view. Returns raw InteractionRows
- * since the contact context is already known.
+ * This is the contact detail timeline view. Returns InteractionRows
+ * with circle_context parsed and circle names resolved.
  *
  * @param db        - D1 database binding
  * @param userId    - The owning user's ID
@@ -229,6 +272,59 @@ export async function getInteractionHistory(
     .all<InteractionRow>();
 
   return { interactions: results, total };
+}
+
+/**
+ * Get interaction history with circle names resolved.
+ *
+ * Enhanced version that resolves circle_context IDs to names
+ * for display in the UI.
+ *
+ * @param db        - D1 database binding
+ * @param userId    - The owning user's ID
+ * @param contactId - The contact to get history for
+ * @param limit     - Max results (default 20)
+ * @param offset    - Pagination offset (default 0)
+ */
+export async function getInteractionHistoryWithCircles(
+  db: D1Database,
+  userId: string,
+  contactId: string,
+  limit: number = 20,
+  offset: number = 0,
+): Promise<{ interactions: InteractionWithCircles[]; total: number }> {
+  const { interactions, total } = await getInteractionHistory(db, userId, contactId, limit, offset);
+
+  // Get all circles for this user to resolve names
+  const { results: circles } = await db
+    .prepare('SELECT id, name FROM circles WHERE user_id = ?')
+    .bind(userId)
+    .all<{ id: string; name: string }>();
+
+  const circleMap = new Map(circles.map(c => [c.id, c.name]));
+
+  // Resolve circle_context to names
+  const enrichedInteractions: InteractionWithCircles[] = interactions.map(interaction => {
+    let circleNames: string[] = [];
+    
+    if (interaction.circle_context) {
+      try {
+        const circleIds = JSON.parse(interaction.circle_context) as string[];
+        circleNames = circleIds
+          .map(id => circleMap.get(id))
+          .filter((name): name is string => !!name);
+      } catch {
+        // Invalid JSON, treat as no specific context
+      }
+    }
+    
+    return {
+      ...interaction,
+      circle_names: circleNames,
+    };
+  });
+
+  return { interactions: enrichedInteractions, total };
 }
 
 /**
@@ -358,6 +454,7 @@ export async function getInteractionStats(
     call: 0,
     in_person: 0,
     email: 0,
+    video: 0,
     social: 0,
     other: 0,
   };
