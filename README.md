@@ -7,3 +7,9 @@ Bethany's contact graph and relationship health engine.
 Auto-deploys to Cloudflare Workers on push to main.
 
 Worker URL: https://network-manager.mrmicaiah.workers.dev
+
+## Features
+
+- Timezone-aware nudge delivery
+- Contact health tracking
+- Trial management
