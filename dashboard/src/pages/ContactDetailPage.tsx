@@ -31,6 +31,8 @@ import {
   Sparkles,
   Activity,
   Star,
+  CircleDot,
+  HelpCircle,
 } from 'lucide-react';
 import { MethodPicker, MethodBadge, type InteractionMethod as MethodType } from '../components/MethodPicker';
 
@@ -74,7 +76,13 @@ interface Interaction {
   method: InteractionMethod;
   summary: string | null;
   logged_via: string;
+  circle_context: string | null;
   created_at: string;
+}
+
+/** Interaction with resolved circle names */
+interface InteractionWithCircles extends Interaction {
+  circle_names: string[];
 }
 
 // ===========================================================================
@@ -191,27 +199,155 @@ function IntentBadge({ intent, size = 'md' }: IntentBadgeProps) {
 }
 
 // ===========================================================================
+// Circle Context Picker Component
+// ===========================================================================
+
+interface CircleContextPickerProps {
+  circles: Circle[];
+  selectedCircleIds: string[];
+  onChange: (circleIds: string[]) => void;
+}
+
+function CircleContextPicker({ circles, selectedCircleIds, onChange }: CircleContextPickerProps) {
+  // If contact is in less than 2 circles, don't show the picker
+  if (circles.length < 2) {
+    return null;
+  }
+
+  const allSelected = selectedCircleIds.length === 0 || selectedCircleIds.length === circles.length;
+
+  const toggleCircle = (circleId: string) => {
+    if (selectedCircleIds.includes(circleId)) {
+      // Remove circle
+      const newIds = selectedCircleIds.filter((id) => id !== circleId);
+      onChange(newIds);
+    } else {
+      // Add circle
+      onChange([...selectedCircleIds, circleId]);
+    }
+  };
+
+  const selectAll = () => {
+    onChange([]); // Empty array means "all circles"
+  };
+
+  return (
+    <div>
+      <div className="flex items-center gap-1.5 mb-2">
+        <label className="block text-sm font-medium text-charcoal">Count toward</label>
+        <div className="group relative">
+          <HelpCircle className="w-3.5 h-3.5 text-charcoal-400 cursor-help" />
+          <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-2 bg-charcoal text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-10">
+            Talked about work, family, or both?
+            <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-charcoal" />
+          </div>
+        </div>
+      </div>
+      
+      <div className="flex flex-wrap gap-2">
+        {/* All circles option */}
+        <button
+          type="button"
+          onClick={selectAll}
+          className={`
+            inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium transition-colors
+            ${allSelected
+              ? 'bg-bethany-100 text-bethany-700 ring-2 ring-bethany-300'
+              : 'bg-cream-dark text-charcoal-600 hover:bg-cream'
+            }
+          `}
+        >
+          <CircleDot className="w-3.5 h-3.5" />
+          All circles
+        </button>
+
+        {/* Individual circle toggles */}
+        {circles.map((circle) => {
+          const isSelected = !allSelected && selectedCircleIds.includes(circle.id);
+          return (
+            <button
+              key={circle.id}
+              type="button"
+              onClick={() => {
+                if (allSelected) {
+                  // First click after "all" — select only this circle
+                  onChange([circle.id]);
+                } else {
+                  toggleCircle(circle.id);
+                }
+              }}
+              className={`
+                inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium transition-colors
+                ${isSelected
+                  ? 'bg-bethany-100 text-bethany-700 ring-2 ring-bethany-300'
+                  : 'bg-cream-dark text-charcoal-600 hover:bg-cream'
+                }
+              `}
+            >
+              {isSelected && <Check className="w-3.5 h-3.5" />}
+              {circle.name}
+            </button>
+          );
+        })}
+      </div>
+      
+      <p className="text-xs text-charcoal-400 mt-1.5">
+        {allSelected 
+          ? 'This interaction will count toward all circles.' 
+          : `This interaction will only count toward: ${circles.filter(c => selectedCircleIds.includes(c.id)).map(c => c.name).join(', ')}`
+        }
+      </p>
+    </div>
+  );
+}
+
+// ===========================================================================
 // Log Interaction Card
 // ===========================================================================
 
 interface LogInteractionCardProps {
-  onSave: (data: { method: InteractionMethod; date: string; summary: string }) => Promise<void>;
+  contactCircles: Circle[];
+  onSave: (data: { 
+    method: InteractionMethod; 
+    date: string; 
+    summary: string;
+    circle_context?: string[];
+  }) => Promise<void>;
   isSaving: boolean;
 }
 
-function LogInteractionCard({ onSave, isSaving }: LogInteractionCardProps) {
+function LogInteractionCard({ contactCircles, onSave, isSaving }: LogInteractionCardProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [method, setMethod] = useState<InteractionMethod>('text');
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [summary, setSummary] = useState('');
+  const [selectedCircleIds, setSelectedCircleIds] = useState<string[]>([]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    await onSave({ method, date, summary });
+    
+    // Build the save data
+    const saveData: { 
+      method: InteractionMethod; 
+      date: string; 
+      summary: string;
+      circle_context?: string[];
+    } = { method, date, summary };
+    
+    // Only include circle_context if:
+    // 1. Contact is in 2+ circles AND
+    // 2. User selected specific circles (not all)
+    if (contactCircles.length >= 2 && selectedCircleIds.length > 0 && selectedCircleIds.length < contactCircles.length) {
+      saveData.circle_context = selectedCircleIds;
+    }
+    
+    await onSave(saveData);
+    
     // Reset form
     setMethod('text');
     setDate(new Date().toISOString().slice(0, 10));
     setSummary('');
+    setSelectedCircleIds([]);
     setIsExpanded(false);
   };
 
@@ -289,6 +425,13 @@ function LogInteractionCard({ onSave, isSaving }: LogInteractionCardProps) {
         />
       </div>
 
+      {/* Circle Context Picker — only shows if contact is in 2+ circles */}
+      <CircleContextPicker
+        circles={contactCircles}
+        selectedCircleIds={selectedCircleIds}
+        onChange={setSelectedCircleIds}
+      />
+
       {/* Actions */}
       <div className="flex items-center justify-end gap-2">
         <button
@@ -316,15 +459,33 @@ function LogInteractionCard({ onSave, isSaving }: LogInteractionCardProps) {
 }
 
 // ===========================================================================
+// Circle Tag Component
+// ===========================================================================
+
+interface CircleTagProps {
+  name: string;
+}
+
+function CircleTag({ name }: CircleTagProps) {
+  return (
+    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-bethany-50 text-bethany-600 text-xs rounded">
+      <CircleDot className="w-2.5 h-2.5" />
+      {name}
+    </span>
+  );
+}
+
+// ===========================================================================
 // Interaction Timeline
 // ===========================================================================
 
 interface InteractionTimelineProps {
-  interactions: Interaction[];
+  interactions: InteractionWithCircles[];
   isLoading: boolean;
+  showCircleTags: boolean;
 }
 
-function InteractionTimeline({ interactions, isLoading }: InteractionTimelineProps) {
+function InteractionTimeline({ interactions, isLoading, showCircleTags }: InteractionTimelineProps) {
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-8">
@@ -351,7 +512,7 @@ function InteractionTimeline({ interactions, isLoading }: InteractionTimelinePro
     if (!acc[dateKey]) acc[dateKey] = [];
     acc[dateKey].push(interaction);
     return acc;
-  }, {} as Record<string, Interaction[]>);
+  }, {} as Record<string, InteractionWithCircles[]>);
 
   return (
     <div className="space-y-4">
@@ -364,6 +525,8 @@ function InteractionTimeline({ interactions, isLoading }: InteractionTimelinePro
             {dayInteractions.map((interaction) => {
               const methodConfig = getMethodConfig(interaction.method);
               const Icon = methodConfig.icon;
+              const hasSpecificCircles = interaction.circle_names && interaction.circle_names.length > 0;
+              
               return (
                 <div
                   key={interaction.id}
@@ -384,6 +547,14 @@ function InteractionTimeline({ interactions, isLoading }: InteractionTimelinePro
                     {interaction.summary && (
                       <p className="text-sm text-charcoal-light mt-1">{interaction.summary}</p>
                     )}
+                    {/* Show circle tags if contact has multiple circles and this interaction has specific context */}
+                    {showCircleTags && hasSpecificCircles && (
+                      <div className="flex flex-wrap gap-1 mt-2">
+                        {interaction.circle_names.map((name) => (
+                          <CircleTag key={name} name={name} />
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </div>
               );
@@ -401,7 +572,7 @@ function InteractionTimeline({ interactions, isLoading }: InteractionTimelinePro
 
 interface RelationshipInsightsProps {
   contact: Contact;
-  interactions: Interaction[];
+  interactions: InteractionWithCircles[];
 }
 
 function RelationshipInsights({ contact, interactions }: RelationshipInsightsProps) {
@@ -662,9 +833,18 @@ export default function ContactDetailPage() {
     id ? `/api/contacts/${id}` : null
   );
   const { data: circles = [] } = useApi<Circle[]>('/api/circles');
-  const { data: interactions = [], isLoading: interactionsLoading, refetch: refetchInteractions } = useApi<Interaction[]>(
-    id ? `/api/interactions?contact_id=${id}&limit=50` : null
+  
+  // Fetch interactions with circle names resolved
+  const { data: interactionsData, isLoading: interactionsLoading, refetch: refetchInteractions } = useApi<{
+    data: InteractionWithCircles[];
+    total: number;
+  }>(
+    id ? `/api/interactions?contact_id=${id}&limit=50&include_circles=true` : null
   );
+  
+  // Extract interactions array from response
+  const interactions = interactionsData?.data ?? interactionsData ?? [];
+  
   const { execute: executeApi, isLoading: isMutating } = useLazyApi();
 
   // Local state
@@ -705,7 +885,12 @@ export default function ContactDetailPage() {
     refetchContact();
   };
 
-  const handleLogInteraction = async (data: { method: InteractionMethod; date: string; summary: string }) => {
+  const handleLogInteraction = async (data: { 
+    method: InteractionMethod; 
+    date: string; 
+    summary: string;
+    circle_context?: string[];
+  }) => {
     if (!contact) return;
 
     await executeApi('/api/interactions', {
@@ -784,6 +969,9 @@ export default function ContactDetailPage() {
   const daysSince = getDaysSince(contact.last_contact_date);
   const healthConfig = getHealthConfig(contact.health_status);
   const intentConfig = getIntentConfig(contact.intent);
+  
+  // Show circle tags in timeline if contact has 2+ circles
+  const showCircleTags = contact.circles.length >= 2;
 
   return (
     <div className="min-h-screen bg-cream">
@@ -1098,7 +1286,7 @@ export default function ContactDetailPage() {
                 <Sparkles className="w-5 h-5 text-bethany-500" />
                 <h3 className="font-medium text-charcoal">Insights</h3>
               </div>
-              <RelationshipInsights contact={contact} interactions={interactions} />
+              <RelationshipInsights contact={contact} interactions={interactions as InteractionWithCircles[]} />
             </section>
 
             {/* Danger zone */}
@@ -1119,13 +1307,21 @@ export default function ContactDetailPage() {
             <section className="bg-warm-white rounded-2xl border border-cream-dark p-5">
               <h3 className="font-medium text-charcoal mb-4">Interaction History</h3>
               
-              {/* Log interaction card */}
+              {/* Log interaction card — pass contact's circles */}
               <div className="mb-6">
-                <LogInteractionCard onSave={handleLogInteraction} isSaving={isMutating} />
+                <LogInteractionCard 
+                  contactCircles={contact.circles}
+                  onSave={handleLogInteraction} 
+                  isSaving={isMutating} 
+                />
               </div>
 
-              {/* Timeline */}
-              <InteractionTimeline interactions={interactions} isLoading={interactionsLoading} />
+              {/* Timeline — show circle tags if contact has 2+ circles */}
+              <InteractionTimeline 
+                interactions={interactions as InteractionWithCircles[]} 
+                isLoading={interactionsLoading}
+                showCircleTags={showCircleTags}
+              />
             </section>
           </div>
         </div>
