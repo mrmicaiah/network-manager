@@ -246,6 +246,7 @@ async function sendSmsReply(
       body: JSON.stringify({
         number: phone,
         content: message,
+        from_number: env.SENDBLUE_PHONE_NUMBER,
         send_style: 'regular',
       }),
     });
