@@ -500,7 +500,7 @@ async function analyzeUserSignals(
   try {
     const responseText = await callAnthropicAPI(env, systemPrompt, [
       { role: 'user', content: conversationText },
-    ], 'claude-haiku-3-5-20241022'); // Use Haiku for signal detection
+    ], 'claude-3-5-haiku-20241022'); // Use Haiku for signal detection
 
     const cleaned = responseText.replace(/```json\n?|```\n?/g, '').trim();
     const parsed = JSON.parse(cleaned);
@@ -762,7 +762,7 @@ async function extractCirclesAndPeople(
   }];
 
   try {
-    const responseText = await callAnthropicAPI(env, systemPrompt, messages, 'claude-haiku-3-5-20241022');
+    const responseText = await callAnthropicAPI(env, systemPrompt, messages, 'claude-3-5-haiku-20241022');
     const cleaned = responseText.replace(/```json\n?|```\n?/g, '').trim();
     const parsed = JSON.parse(cleaned);
 
