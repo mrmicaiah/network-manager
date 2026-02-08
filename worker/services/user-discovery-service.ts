@@ -101,7 +101,7 @@ export interface DiscoveryConversationState {
  * Combined with her personality config for each AI call.
  */
 const STAGE_PROMPTS: Record<DiscoveryStage, string> = {
-  intro: `
+  intro: \`
     You're texting with a complete stranger who just reached out.
     You have NO idea who they are or why they're texting.
     
@@ -118,9 +118,9 @@ const STAGE_PROMPTS: Record<DiscoveryStage, string> = {
     Example energy (don't copy exactly):
     "Hey! I don't think we've met — I'm Bethany. I help people keep track of
     the relationships that matter to them. Who am I texting with?"
-  `,
+  \`,
 
-  learn_name: `
+  learn_name: \`
     The user just told you their name (or something about themselves).
     
     Your goal: Acknowledge their name warmly, then learn more about them.
@@ -132,9 +132,9 @@ const STAGE_PROMPTS: Record<DiscoveryStage, string> = {
     
     Stay curious and conversational. Don't be an intake form.
     1-2 sentences. This is texting, not email.
-  `,
+  \`,
 
-  learn_about: `
+  learn_about: \`
     You know their name and are learning about their world.
     
     Your goal: Understand their situation. Are they...
@@ -150,9 +150,9 @@ const STAGE_PROMPTS: Record<DiscoveryStage, string> = {
     Don't rush — this is a real conversation.
     
     2-3 sentences max. One question at a time.
-  `,
+  \`,
 
-  discover_circles: `
+  discover_circles: \`
     You're in the discovery phase — learning who matters to this person.
     
     Your goal: Map out their relationship world. Listen for:
@@ -169,9 +169,9 @@ const STAGE_PROMPTS: Record<DiscoveryStage, string> = {
     
     Don't try to capture everyone. Get the shape of their world.
     2-3 sentences. One question max.
-  `,
+  \`,
 
-  sell_value: `
+  sell_value: \`
     You've learned enough about their world. Time to show value.
     
     Your goal: Connect what you do to what THEY told you.
@@ -187,9 +187,9 @@ const STAGE_PROMPTS: Record<DiscoveryStage, string> = {
     a quick link to create your dashboard."
     
     2-3 sentences. Make them want to try it.
-  `,
+  \`,
 
-  send_signup: `
+  send_signup: \`
     The user is ready (or seems ready) to sign up.
     
     Your goal: Generate and send the signup link.
@@ -203,9 +203,9 @@ const STAGE_PROMPTS: Record<DiscoveryStage, string> = {
     
     Don't over-explain. The link speaks for itself.
     1-2 sentences plus the link.
-  `,
+  \`,
 
-  waiting_signup: `
+  waiting_signup: \`
     You've sent the signup link and are waiting for them to complete it.
     
     If they text again without signing up, you can:
@@ -218,7 +218,7 @@ const STAGE_PROMPTS: Record<DiscoveryStage, string> = {
     If they seem to have forgotten, one gentle reminder is fine.
     
     Keep responses brief and helpful.
-  `,
+  \`,
 };
 
 // ===========================================================================
@@ -402,7 +402,7 @@ export async function archiveDiscoveryState(
   if (!state) return;
 
   try {
-    const archiveKey = `discovery/${phone}/${state.startedAt}.json`;
+    const archiveKey = \`discovery/\${phone}/\${state.startedAt}.json\`;
     await env.STORAGE.put(archiveKey, JSON.stringify(state, null, 2));
 
     // Clear the DO state
@@ -469,8 +469,8 @@ async function determineNextStage(
     case 'sell_value':
       // If they express interest or ask for the link, send it
       const readySignals = [
-        'yes', 'yeah', 'sure', 'let\'s do it', 'sign me up', 'sounds good',
-        'i\'m in', 'link', 'send it', 'okay', 'ok', 'ready', 'let\'s go',
+        'yes', 'yeah', 'sure', 'let\\'s do it', 'sign me up', 'sounds good',
+        'i\\'m in', 'link', 'send it', 'okay', 'ok', 'ready', 'let\\'s go',
         'how do i', 'get started', 'try it', 'interested',
       ];
 
@@ -542,7 +542,7 @@ async function generateSignupLink(
 function formatPeopleDiscussed(people: DiscoveryConversationState['peopleDiscussed']): string {
   if (people.length === 0) return 'None yet';
   return people
-    .map(p => `${p.name} (${p.relationship || 'unknown relationship'})`)
+    .map(p => \`\${p.name} (\${p.relationship || 'unknown relationship'})\`)
     .join(', ');
 }
 
@@ -556,19 +556,19 @@ async function generateBethanyResponse(
   const stagePrompt = STAGE_PROMPTS[state.stage];
   const peopleStr = formatPeopleDiscussed(state.peopleDiscussed);
 
-  const systemPrompt = `
+  const systemPrompt = \`
     You are Bethany — a romance novelist who also helps people manage their
     relationship networks. You're texting with someone new.
     
-    Current stage: ${state.stage}
-    Their name: ${state.name ?? 'Unknown'}
-    What they do: ${state.whatTheyDo ?? 'Unknown'}
-    Circles discussed: ${JSON.stringify(state.circlesDiscussed)}
-    People discussed: ${peopleStr}
-    Pain points: ${JSON.stringify(state.painPoints)}
+    Current stage: \${state.stage}
+    Their name: \${state.name ?? 'Unknown'}
+    What they do: \${state.whatTheyDo ?? 'Unknown'}
+    Circles discussed: \${JSON.stringify(state.circlesDiscussed)}
+    People discussed: \${peopleStr}
+    Pain points: \${JSON.stringify(state.painPoints)}
     
     STAGE GUIDANCE:
-    ${stagePrompt}
+    \${stagePrompt}
     
     BETHANY'S VOICE:
     - Warm but not saccharine
@@ -582,7 +582,7 @@ async function generateBethanyResponse(
     CRITICAL: Respond ONLY with Bethany's next text message.
     No stage markers, no metadata, no explanatory text.
     Just her words as they'd appear in a text message.
-  `;
+  \`;
 
   // Convert messages to Anthropic format
   const messages = state.messages.map(m => ({
@@ -612,10 +612,10 @@ async function extractLearnings(
   painPoints: string[];
 }> {
   const conversationText = state.messages
-    .map(m => `${m.role === 'bethany' ? 'Bethany' : 'User'}: ${m.content}`)
-    .join('\n');
+    .map(m => \`\${m.role === 'bethany' ? 'Bethany' : 'User'}: \${m.content}\`)
+    .join('\\n');
 
-  const systemPrompt = `
+  const systemPrompt = \`
     Analyze this conversation and extract information about the user.
     
     Respond ONLY with valid JSON:
@@ -636,7 +636,7 @@ async function extractLearnings(
     - People must have names. "My sister" without a name = skip until name given
     - Pain points are direct quotes or clear paraphrases of frustrations
     - Return nulls and empty arrays if not enough info yet
-  `;
+  \`;
 
   try {
     const response = await callAnthropicAPI(env, systemPrompt, [{
@@ -644,7 +644,7 @@ async function extractLearnings(
       content: conversationText,
     }]);
 
-    const cleaned = response.replace(/```json\n?|```\n?/g, '').trim();
+    const cleaned = response.replace(/\`\`\`json\\n?|\`\`\`\\n?/g, '').trim();
     const parsed = JSON.parse(cleaned);
 
     return {
@@ -695,8 +695,8 @@ async function sendViaSendBlue(
 
   if (!response.ok) {
     const errorBody = await response.text();
-    console.error(`[sendblue] Send failed: ${response.status} — ${errorBody}`);
-    throw new Error(`SendBlue send failed: ${response.status}`);
+    console.error(\`[sendblue] Send failed: \${response.status} — \${errorBody}\`);
+    throw new Error(\`SendBlue send failed: \${response.status}\`);
   }
 
   const result = await response.json() as { message_id?: string; id?: string };
@@ -724,7 +724,7 @@ async function callAnthropicAPI(
       'anthropic-version': '2023-06-01',
     },
     body: JSON.stringify({
-      model: 'claude-sonnet-4-5-20250929',
+      model: 'claude-3-5-sonnet-20241022',
       max_tokens: 300,
       system: systemPrompt,
       messages: messages.length > 0 ? messages : [
@@ -735,8 +735,8 @@ async function callAnthropicAPI(
 
   if (!response.ok) {
     const errorBody = await response.text();
-    console.error(`[anthropic] API error: ${response.status} — ${errorBody}`);
-    throw new Error(`Anthropic API failed: ${response.status}`);
+    console.error(\`[anthropic] API error: \${response.status} — \${errorBody}\`);
+    throw new Error(\`Anthropic API failed: \${response.status}\`);
   }
 
   const data = await response.json() as {
@@ -821,13 +821,13 @@ export async function resendSignupLink(
     await storeDiscoveryState(env, phone, newState);
 
     return {
-      response: `Here's a fresh link for you: ${url}`,
+      response: \`Here's a fresh link for you: \${url}\`,
       url,
     };
   }
 
   // Resend existing link
-  const response = `Here's that link again: ${state.signupUrl}`;
+  const response = \`Here's that link again: \${state.signupUrl}\`;
   await sendViaSendBlue(env, phone, response);
 
   return {
