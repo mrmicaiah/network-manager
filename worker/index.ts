@@ -16,7 +16,7 @@
  */
 
 import { Env } from '../shared/types';
-import { corsHeaders, jsonResponse, errorResponse } from '../shared/http';
+import { getCorsHeaders, jsonResponse, errorResponse } from '../shared/http';
 import { handleSmsWebhook } from './routes/sms';
 import { handleSignupPost, handleSignupPage, handleSignupComplete } from './routes/signup';
 import { handleApiRoute } from './routes/api';
@@ -30,7 +30,7 @@ export { NudgeContextDO } from './services/nudge-conversation-flow';
 export { IntentContextDO as IntentSortingDO } from './services/intent-assignment-flow';
 
 const VERSION = {
-  version: '0.12.0',
+  version: '0.12.1',
   updated: '2026-02-08',
   codename: 'network-manager',
 };
@@ -38,10 +38,14 @@ const VERSION = {
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
+    const origin = request.headers.get('Origin');
 
     // CORS preflight
     if (request.method === 'OPTIONS') {
-      return new Response(null, { headers: corsHeaders });
+      return new Response(null, { 
+        status: 204,
+        headers: getCorsHeaders(origin),
+      });
     }
 
     try {
@@ -53,13 +57,13 @@ export default {
           status: 'ok',
           ...VERSION,
           timestamp: new Date().toISOString(),
-        });
+        }, 200, origin);
       }
 
       if (url.pathname === '/version') {
         return new Response(
           `Network Manager v${VERSION.version} (${VERSION.codename})`,
-          { headers: { ...corsHeaders, 'Content-Type': 'text/plain' } }
+          { headers: { ...getCorsHeaders(origin), 'Content-Type': 'text/plain' } }
         );
       }
 
@@ -73,7 +77,7 @@ export default {
         if (request.method === 'POST') {
           return handleSignupPost(request, env, ctx);
         }
-        return errorResponse('Method not allowed', 405);
+        return errorResponse('Method not allowed', 405, undefined, origin);
       }
 
       // Token exchange for post-signup redirect
@@ -102,16 +106,16 @@ export default {
       if (url.pathname.startsWith('/internal/')) {
         const apiKey = request.headers.get('X-API-Key');
         if (apiKey !== env.INTERNAL_API_KEY) {
-          return errorResponse('Unauthorized', 401);
+          return errorResponse('Unauthorized', 401, undefined, origin);
         }
         // TODO: Internal API routes
-        return errorResponse('Not implemented', 501);
+        return errorResponse('Not implemented', 501, undefined, origin);
       }
 
-      return errorResponse('Not found', 404);
+      return errorResponse('Not found', 404, undefined, origin);
     } catch (err) {
       console.error('Unhandled error:', err);
-      return errorResponse('Internal server error', 500);
+      return errorResponse('Internal server error', 500, undefined, origin);
     }
   },
 
