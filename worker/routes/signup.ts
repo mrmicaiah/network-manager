@@ -9,13 +9,16 @@
  *   4. Create user record in D1 (with onboarding_stage = 'intro_sent')
  *   5. Initialize default circles (Family, Friends, Work, Community)
  *   6. Start 14-day trial
- *   7. Create session token and cookie (auto-login)
+ *   7. Create a one-time login token for auto-login redirect
  *   8. Trigger Bethany's intro message via initializeOnboarding()
  *      (SendBlue send-first registers the contact for inbound routing)
- *   9. Return success JSON with Set-Cookie header
+ *   9. Return success JSON with redirect URL containing login token
  *
  * GET /signup:
  *   Redirects to the landing page at bethany.untitledpublishers.com/signup
+ *
+ * GET /signup/complete?token=xxx:
+ *   Exchanges the one-time token for a session cookie and redirects to welcome page
  *
  * @see worker/services/onboarding-service.ts for initializeOnboarding()
  * @see worker/services/circle-service.ts for initializeDefaultCircles()
@@ -37,7 +40,10 @@ import { createSessionToken, buildSessionCookie } from '../services/auth-service
 // ---------------------------------------------------------------------------
 
 /** The landing page URL where users sign up */
-const LANDING_PAGE_URL = 'https://bethany.untitledpublishers.com/signup';
+const LANDING_PAGE_URL = 'https://network-manager-site.pages.dev/signup';
+
+/** One-time token expiry in minutes */
+const LOGIN_TOKEN_EXPIRY_MINUTES = 5;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -126,6 +132,98 @@ async function hashPin(pin: string, secret: string): Promise<string> {
   return Array.from(new Uint8Array(sig))
     .map(b => b.toString(16).padStart(2, '0'))
     .join('');
+}
+
+// ---------------------------------------------------------------------------
+// One-Time Login Token
+// ---------------------------------------------------------------------------
+
+/**
+ * Generate a one-time login token for post-signup redirect.
+ * Token is stored in D1 and can only be used once.
+ */
+async function createLoginToken(
+  db: D1Database,
+  userId: string,
+  secret: string,
+): Promise<string> {
+  const tokenBytes = new Uint8Array(32);
+  crypto.getRandomValues(tokenBytes);
+  const token = Array.from(tokenBytes)
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
+  
+  const expiresAt = new Date();
+  expiresAt.setMinutes(expiresAt.getMinutes() + LOGIN_TOKEN_EXPIRY_MINUTES);
+  
+  // Store token hash (not the token itself)
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const sig = await crypto.subtle.sign('HMAC', key, encoder.encode(token));
+  const tokenHash = Array.from(new Uint8Array(sig))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
+  
+  await db
+    .prepare(
+      `INSERT INTO login_tokens (id, user_id, token_hash, expires_at, used)
+       VALUES (?, ?, ?, ?, 0)`
+    )
+    .bind(crypto.randomUUID(), userId, tokenHash, expiresAt.toISOString())
+    .run();
+  
+  return token;
+}
+
+/**
+ * Validate and consume a one-time login token.
+ * Returns the user ID if valid, null otherwise.
+ */
+async function consumeLoginToken(
+  db: D1Database,
+  token: string,
+  secret: string,
+): Promise<string | null> {
+  // Hash the provided token
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const sig = await crypto.subtle.sign('HMAC', key, encoder.encode(token));
+  const tokenHash = Array.from(new Uint8Array(sig))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
+  
+  // Find and validate token
+  const record = await db
+    .prepare(
+      `SELECT user_id, expires_at, used FROM login_tokens
+       WHERE token_hash = ?`
+    )
+    .bind(tokenHash)
+    .first<{ user_id: string; expires_at: string; used: number }>();
+  
+  if (!record) return null;
+  if (record.used === 1) return null;
+  if (new Date(record.expires_at) < new Date()) return null;
+  
+  // Mark as used
+  await db
+    .prepare(`UPDATE login_tokens SET used = 1 WHERE token_hash = ?`)
+    .bind(tokenHash)
+    .run();
+  
+  return record.user_id;
 }
 
 // ---------------------------------------------------------------------------
@@ -238,37 +336,15 @@ export async function handleSignupPost(
     // Non-fatal — defaults to trial tier from schema
   }
 
-  // Create session token for auto-login
-  // Build a minimal UserRow for token creation
-  const userForSession: UserRow = {
-    id: userId,
-    phone,
-    email,
-    name,
-    pin_hash: pinHash,
-    subscription_tier: 'trial',
-    onboarding_stage: initialStage,
-    created_at: nowIso,
-    updated_at: nowIso,
-    // Default values for other fields
-    gender: null,
-    trial_ends_at: null,
-    stripe_customer_id: null,
-    stripe_subscription_id: null,
-    default_circle_id: null,
-    circle_tab_order: null,
-    timezone: 'America/New_York',
-    preferred_nudge_hour: 9,
-    nudge_frequency: 'daily',
-    quiet_hours_start: null,
-    quiet_hours_end: null,
-    last_pin_verified: null,
-    failed_pin_attempts: 0,
-    account_locked: 0,
-  };
-
-  const sessionToken = await createSessionToken(userForSession, env.PIN_SIGNING_SECRET, now);
-  const sessionCookie = buildSessionCookie(sessionToken, now);
+  // Create one-time login token for redirect
+  let loginToken: string;
+  try {
+    loginToken = await createLoginToken(env.DB, userId, env.PIN_SIGNING_SECRET);
+  } catch (err) {
+    console.error('[signup] Login token creation failed:', err);
+    // Fall back to manual login
+    loginToken = '';
+  }
 
   // Trigger Bethany's intro message (non-blocking)
   // This is critical — SendBlue requires send-first to register
@@ -290,30 +366,74 @@ export async function handleSignupPost(
     })()
   );
 
-  // Determine redirect URL (dashboard with onboarding flag)
+  // Determine redirect URL
   const dashboardUrl = env.DASHBOARD_URL || 'https://network-manager.pages.dev';
-  const redirectUrl = `${dashboardUrl}/welcome`;
+  const redirectUrl = loginToken
+    ? `${dashboardUrl}/auth/callback?token=${loginToken}`
+    : `${dashboardUrl}/login?welcome=true`;
 
-  // Return success with session cookie
-  const response = new Response(
-    JSON.stringify({
+  // Return success
+  return jsonResponse(
+    {
       success: true,
       userId,
       name,
       message: 'Account created! Check your texts - Bethany is reaching out.',
       redirectUrl,
-    } as SignupSuccess),
-    {
-      status: 201,
-      headers: {
-        ...corsHeaders,
-        'Content-Type': 'application/json',
-        'Set-Cookie': sessionCookie,
-      },
-    },
+    } as SignupSuccess,
+    201,
   );
+}
 
-  return response;
+// ---------------------------------------------------------------------------
+// GET /signup/complete Handler (Token Exchange)
+// ---------------------------------------------------------------------------
+
+/**
+ * Exchange a one-time login token for a session cookie.
+ * Redirects to the welcome page on success, login page on failure.
+ */
+export async function handleSignupComplete(
+  request: Request,
+  env: Env,
+): Promise<Response> {
+  const url = new URL(request.url);
+  const token = url.searchParams.get('token');
+  const dashboardUrl = env.DASHBOARD_URL || 'https://network-manager.pages.dev';
+  
+  if (!token) {
+    return Response.redirect(`${dashboardUrl}/login?error=missing_token`, 302);
+  }
+  
+  // Validate and consume token
+  const userId = await consumeLoginToken(env.DB, token, env.PIN_SIGNING_SECRET);
+  
+  if (!userId) {
+    return Response.redirect(`${dashboardUrl}/login?error=invalid_token&welcome=true`, 302);
+  }
+  
+  // Get user
+  const user = await env.DB
+    .prepare('SELECT * FROM users WHERE id = ?')
+    .bind(userId)
+    .first<UserRow>();
+  
+  if (!user) {
+    return Response.redirect(`${dashboardUrl}/login?error=user_not_found`, 302);
+  }
+  
+  // Create session
+  const sessionToken = await createSessionToken(user, env.PIN_SIGNING_SECRET);
+  const sessionCookie = buildSessionCookie(sessionToken);
+  
+  // Redirect to welcome page with session cookie
+  return new Response(null, {
+    status: 302,
+    headers: {
+      'Location': `${dashboardUrl}/welcome`,
+      'Set-Cookie': sessionCookie,
+    },
+  });
 }
 
 // ---------------------------------------------------------------------------
