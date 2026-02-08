@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { CheckCircle } from 'lucide-react';
@@ -21,6 +21,9 @@ export function LoginPage() {
   const [code, setCode] = useState('');
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  
+  // Track previous value length to detect backspace
+  const prevPhoneLength = useRef(0);
 
   // Resend timer state
   const [canResend, setCanResend] = useState(false);
@@ -60,18 +63,32 @@ export function LoginPage() {
 
   /**
    * Format phone number as user types: (555) 123-4567
+   * Only formats when adding characters, allows free backspacing.
    */
   const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    let value = e.target.value.replace(/\D/g, '');
-    if (value.length > 10) value = value.slice(0, 10);
-
-    if (value.length >= 6) {
-      value = '(' + value.slice(0, 3) + ') ' + value.slice(3, 6) + '-' + value.slice(6);
-    } else if (value.length >= 3) {
-      value = '(' + value.slice(0, 3) + ') ' + value.slice(3);
+    const input = e.target.value;
+    const digits = input.replace(/\D/g, '').slice(0, 10);
+    const isDeleting = input.length < prevPhoneLength.current;
+    
+    let formatted: string;
+    
+    if (isDeleting) {
+      // When deleting, just show the raw digits without formatting
+      // This allows clean backspacing
+      formatted = digits;
+    } else {
+      // When adding, apply formatting
+      if (digits.length >= 6) {
+        formatted = '(' + digits.slice(0, 3) + ') ' + digits.slice(3, 6) + '-' + digits.slice(6);
+      } else if (digits.length >= 3) {
+        formatted = '(' + digits.slice(0, 3) + ') ' + digits.slice(3);
+      } else {
+        formatted = digits;
+      }
     }
-
-    setPhone(value);
+    
+    prevPhoneLength.current = formatted.length;
+    setPhone(formatted);
   };
 
   /**
@@ -132,6 +149,18 @@ export function LoginPage() {
       setError(result.error || 'Failed to resend code');
     }
   };
+  
+  /**
+   * Format phone on blur for clean display.
+   */
+  const handlePhoneBlur = () => {
+    const digits = phone.replace(/\D/g, '');
+    if (digits.length === 10) {
+      const formatted = '(' + digits.slice(0, 3) + ') ' + digits.slice(3, 6) + '-' + digits.slice(6);
+      setPhone(formatted);
+      prevPhoneLength.current = formatted.length;
+    }
+  };
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-cream px-4">
@@ -170,6 +199,7 @@ export function LoginPage() {
                 type="tel"
                 value={phone}
                 onChange={handlePhoneChange}
+                onBlur={handlePhoneBlur}
                 placeholder="(555) 123-4567"
                 className="input-field"
                 autoFocus
