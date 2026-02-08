@@ -33,6 +33,10 @@ PRAGMA foreign_keys = ON;
 -- last_trial_reminder and trial_reminder_stage track trial lifecycle messaging.
 -- default_circle_id is the dashboard tab that loads first.
 -- circle_tab_order is a JSON array of circle IDs in display order.
+-- timezone is the user's IANA timezone for scheduling nudges.
+-- preferred_nudge_hour is the hour (0-23) when nudges should be delivered.
+-- nudge_frequency controls how often proactive nudges are sent.
+-- quiet_hours_start/end define a window when no SMS should be sent.
 -- @see Roberts & Dunbar (2011, 2015) for gender maintenance patterns.
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS users (
@@ -57,6 +61,12 @@ CREATE TABLE IF NOT EXISTS users (
   trial_reminder_stage TEXT DEFAULT NULL,
   default_circle_id   TEXT DEFAULT NULL,
   circle_tab_order    TEXT DEFAULT NULL,
+  timezone            TEXT DEFAULT 'America/Chicago',
+  preferred_nudge_hour INTEGER DEFAULT 8,
+  nudge_frequency     TEXT DEFAULT 'daily'
+    CHECK (nudge_frequency IN ('daily', 'weekly', 'as_needed')),
+  quiet_hours_start   TEXT DEFAULT NULL,
+  quiet_hours_end     TEXT DEFAULT NULL,
   created_at          TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
 );
