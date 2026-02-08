@@ -16,6 +16,7 @@
  *   /api/user/*          — Profile read/update, notification preferences, account deletion
  *   /api/subscription/*  — Tier info, checkout, portal
  *   /api/dashboard/*     — Dashboard tabs and dartboard data
+ *   /api/admin/*         — Admin dashboard (permission-guarded)
  *   /api/stripe/webhook  — Stripe webhook handler (no auth)
  *
  * Standard response format:
@@ -26,6 +27,7 @@
 
 import type { Env } from '../../shared/types';
 import { jsonResponse, errorResponse } from '../../shared/http';
+import { handleAdminRoute } from './admin';
 import {
   requireAuth,
   withRefreshedSession,
@@ -194,6 +196,9 @@ export async function handleApiRoute(
       response = await handleCheckout(request, env, auth.auth);
     } else if (path === '/api/subscription/portal' && method === 'POST') {
       response = await handlePortal(request, env, auth.auth);
+    } else if (path.startsWith('/api/admin/')) {
+      const origin = request.headers.get('Origin');
+      response = await handleAdminRoute(request, env, user.id, path, method, origin);
     } else {
       response = errorResponse('Not found', 404);
     }
