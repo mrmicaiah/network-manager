@@ -157,6 +157,7 @@ export function SettingsPage() {
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
   const [isDeletingAccount, setIsDeletingAccount] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   // Section collapse state
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(['subscription', 'profile']));
@@ -383,12 +384,25 @@ export function SettingsPage() {
     if (deleteConfirmText !== 'DELETE') return;
     
     setIsDeletingAccount(true);
+    setDeleteError(null);
+    
     try {
-      // TODO: Implement account deletion endpoint
-      await fetch('/api/user', { method: 'DELETE', credentials: 'include' });
+      const response = await fetch('/api/user', {
+        method: 'DELETE',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirm: true }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || 'Failed to delete account');
+      }
+
+      // Account deleted successfully, logout
       await logout();
     } catch (err) {
-      alert('Failed to delete account. Please contact support.');
+      setDeleteError(err instanceof Error ? err.message : 'Failed to delete account. Please contact support.');
     } finally {
       setIsDeletingAccount(false);
     }
@@ -1148,6 +1162,7 @@ export function SettingsPage() {
           onClose={() => {
             setShowDeleteModal(false);
             setDeleteConfirmText('');
+            setDeleteError(null);
           }}
         >
           <div className="space-y-4">
@@ -1155,6 +1170,9 @@ export function SettingsPage() {
               <p className="text-sm text-red-700">
                 <strong>Warning:</strong> This action cannot be undone. All your contacts, 
                 interactions, and settings will be permanently deleted.
+                {subscription?.isPremium && (
+                  <> Your premium subscription will also be canceled.</>
+                )}
               </p>
             </div>
 
@@ -1170,6 +1188,13 @@ export function SettingsPage() {
                 className="input-field"
               />
             </div>
+
+            {deleteError && (
+              <div className="p-3 rounded-xl text-sm flex items-center gap-2 bg-red-50 text-red-700">
+                <AlertCircle className="w-4 h-4" />
+                {deleteError}
+              </div>
+            )}
 
             <button
               onClick={handleDeleteAccount}
