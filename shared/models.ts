@@ -674,3 +674,178 @@ export const DEFAULT_CIRCLES = [
   { name: 'Work', type: 'default' as CircleType, sort_order: 3 },
   { name: 'Community', type: 'default' as CircleType, sort_order: 4 },
 ] as const;
+
+// ===========================================================================
+// RBAC — Role-Based Access Control Types
+// ===========================================================================
+
+/**
+ * Role name — predefined system roles.
+ * Custom roles may be added but these are the foundation.
+ */
+export type RoleName = 'user' | 'admin' | 'superadmin';
+
+/**
+ * Permission resource — the entity a permission applies to.
+ * Extensible as new admin features are added.
+ */
+export type PermissionResource =
+  | 'users'
+  | 'billing'
+  | 'contacts'
+  | 'roles'
+  | 'permissions'
+  | 'audit_log';
+
+/**
+ * Permission action — what can be done to a resource.
+ */
+export type PermissionAction = 'read' | 'write' | 'delete' | 'manage';
+
+/**
+ * Audit log action — standardized action identifiers for the audit trail.
+ * Uses resource.verb pattern for consistency.
+ */
+export type AuditAction =
+  | 'user.update'
+  | 'user.delete'
+  | 'user.lock'
+  | 'user.unlock'
+  | 'role.assign'
+  | 'role.revoke'
+  | 'role.create'
+  | 'role.update'
+  | 'role.delete'
+  | 'permission.grant'
+  | 'permission.revoke'
+  | 'contact.update'
+  | 'contact.delete'
+  | 'subscription.update';
+
+// ===========================================================================
+// RBAC — D1 Row Types
+// ===========================================================================
+
+/**
+ * Role — a named set of permissions that can be assigned to users.
+ * Default roles (user, admin, superadmin) are seeded on first deploy.
+ */
+export interface RoleRow {
+  id: string;                    // UUID primary key
+  name: string;                  // Unique role name (e.g., 'admin')
+  description: string | null;    // Human-readable description
+  created_at: string;            // ISO timestamp
+  updated_at: string;            // ISO timestamp
+}
+
+/**
+ * Permission — a granular capability using resource:action pattern.
+ * e.g., name='users:read', resource='users', action='read'
+ */
+export interface PermissionRow {
+  id: string;                    // UUID primary key
+  name: string;                  // Unique, format: 'resource:action'
+  resource: string;              // Target resource (e.g., 'users')
+  action: string;                // Allowed action (e.g., 'read')
+  description: string | null;    // Human-readable description
+  created_at: string;            // ISO timestamp
+}
+
+/**
+ * RolePermission — junction mapping permissions to roles.
+ */
+export interface RolePermissionRow {
+  role_id: string;               // FK → roles.id
+  permission_id: string;         // FK → permissions.id
+  granted_at: string;            // ISO timestamp
+}
+
+/**
+ * UserRole — junction assigning roles to users.
+ * granted_by tracks who performed the assignment (null for system-assigned).
+ */
+export interface UserRoleRow {
+  user_id: string;               // FK → users.id
+  role_id: string;               // FK → roles.id
+  granted_at: string;            // ISO timestamp
+  granted_by: string | null;     // FK → users.id, null for system-assigned
+}
+
+/**
+ * AdminAuditLog — immutable record of an admin action.
+ * details is a JSON blob capturing before/after state for accountability.
+ */
+export interface AdminAuditLogRow {
+  id: string;                    // UUID primary key
+  user_id: string;               // FK → users.id — who performed the action
+  action: string;                // e.g., 'user.update', 'role.assign'
+  resource_type: string | null;  // e.g., 'user', 'contact'
+  resource_id: string | null;    // ID of the affected resource
+  details: string | null;        // JSON blob — what changed
+  ip_address: string | null;
+  user_agent: string | null;
+  created_at: string;            // ISO timestamp
+}
+
+// ===========================================================================
+// RBAC — Application-Level Types
+// ===========================================================================
+
+/**
+ * Role with its permissions resolved — used by auth middleware.
+ */
+export interface RoleWithPermissions extends RoleRow {
+  permissions: PermissionRow[];
+}
+
+/**
+ * User with roles resolved — used by admin dashboard and auth checks.
+ */
+export interface UserWithRoles extends UserRow {
+  roles: RoleRow[];
+}
+
+/**
+ * Input for creating an audit log entry.
+ */
+export interface CreateAuditLogInput {
+  user_id: string;
+  action: AuditAction | string;
+  resource_type?: string;
+  resource_id?: string;
+  details?: Record<string, unknown>;
+  ip_address?: string;
+  user_agent?: string;
+}
+
+/**
+ * Default roles seeded on first deploy.
+ */
+export const DEFAULT_ROLES: Array<{ name: RoleName; description: string }> = [
+  { name: 'user', description: 'Standard user — access to own data only' },
+  { name: 'admin', description: 'Admin — can view and manage all users and data' },
+  { name: 'superadmin', description: 'Super admin — full system access including role management' },
+];
+
+/**
+ * Default permissions seeded on first deploy.
+ * Uses resource:action naming convention.
+ */
+export const DEFAULT_PERMISSIONS: Array<{
+  name: string;
+  resource: PermissionResource;
+  action: PermissionAction;
+  description: string;
+}> = [
+  { name: 'users:read', resource: 'users', action: 'read', description: 'View user profiles and data' },
+  { name: 'users:write', resource: 'users', action: 'write', description: 'Edit user profiles' },
+  { name: 'users:delete', resource: 'users', action: 'delete', description: 'Delete user accounts' },
+  { name: 'users:manage', resource: 'users', action: 'manage', description: 'Full user management (lock, unlock, tier changes)' },
+  { name: 'billing:read', resource: 'billing', action: 'read', description: 'View billing and subscription data' },
+  { name: 'billing:manage', resource: 'billing', action: 'manage', description: 'Manage subscriptions and billing' },
+  { name: 'contacts:read', resource: 'contacts', action: 'read', description: "View any user's contacts" },
+  { name: 'contacts:write', resource: 'contacts', action: 'write', description: "Edit any user's contacts" },
+  { name: 'roles:read', resource: 'roles', action: 'read', description: 'View roles and assignments' },
+  { name: 'roles:manage', resource: 'roles', action: 'manage', description: 'Create, edit, delete roles and assign permissions' },
+  { name: 'audit_log:read', resource: 'audit_log', action: 'read', description: 'View admin audit trail' },
+];
