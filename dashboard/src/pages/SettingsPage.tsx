@@ -153,6 +153,11 @@ export function SettingsPage() {
   const [isSavingCircle, setIsSavingCircle] = useState(false);
   const [circleMessage, setCircleMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
+  // Circle drag-and-drop state
+  const [draggedCircleId, setDraggedCircleId] = useState<string | null>(null);
+  const [dragOverCircleId, setDragOverCircleId] = useState<string | null>(null);
+  const [isReordering, setIsReordering] = useState(false);
+
   // Delete account state
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState('');
@@ -338,6 +343,80 @@ export function SettingsPage() {
       alert(err instanceof Error ? err.message : 'Failed to delete circle');
     }
   }, [circleApi, refetchCircles]);
+
+  // Circle reordering
+  const handleReorderCircles = useCallback(async (circleIds: string[]) => {
+    setIsReordering(true);
+    try {
+      await circleApi('/api/circles/reorder', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ circleIds }),
+      });
+      await refetchCircles();
+    } catch (err) {
+      console.error('Failed to reorder circles:', err);
+      // Refetch to reset to server state
+      await refetchCircles();
+    } finally {
+      setIsReordering(false);
+    }
+  }, [circleApi, refetchCircles]);
+
+  const handleDragStart = useCallback((e: React.DragEvent, circleId: string) => {
+    setDraggedCircleId(circleId);
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', circleId);
+    // Add a slight delay to allow the drag image to be captured
+    setTimeout(() => {
+      const element = e.target as HTMLElement;
+      element.style.opacity = '0.5';
+    }, 0);
+  }, []);
+
+  const handleDragOver = useCallback((e: React.DragEvent, circleId: string) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    if (circleId !== draggedCircleId) {
+      setDragOverCircleId(circleId);
+    }
+  }, [draggedCircleId]);
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOverCircleId(null);
+  }, []);
+
+  const handleDrop = useCallback((e: React.DragEvent, targetCircleId: string) => {
+    e.preventDefault();
+    setDragOverCircleId(null);
+
+    if (!draggedCircleId || draggedCircleId === targetCircleId || !circles) {
+      return;
+    }
+
+    // Calculate new order
+    const currentOrder = circles.map((c) => c.id);
+    const draggedIndex = currentOrder.indexOf(draggedCircleId);
+    const targetIndex = currentOrder.indexOf(targetCircleId);
+
+    if (draggedIndex === -1 || targetIndex === -1) return;
+
+    // Remove dragged item and insert at new position
+    const newOrder = [...currentOrder];
+    newOrder.splice(draggedIndex, 1);
+    newOrder.splice(targetIndex, 0, draggedCircleId);
+
+    // Call API to persist
+    handleReorderCircles(newOrder);
+  }, [draggedCircleId, circles, handleReorderCircles]);
+
+  const handleDragEnd = useCallback((e: React.DragEvent) => {
+    const element = e.target as HTMLElement;
+    element.style.opacity = '1';
+    setDraggedCircleId(null);
+    setDragOverCircleId(null);
+  }, []);
 
   // Subscription actions
   const handleUpgrade = useCallback(async () => {
@@ -785,10 +864,22 @@ export function SettingsPage() {
           {circles?.map((circle) => (
             <div
               key={circle.id}
-              className="px-5 py-3 flex items-center justify-between hover:bg-cream transition-colors"
+              draggable={!isReordering}
+              onDragStart={(e) => handleDragStart(e, circle.id)}
+              onDragOver={(e) => handleDragOver(e, circle.id)}
+              onDragLeave={handleDragLeave}
+              onDrop={(e) => handleDrop(e, circle.id)}
+              onDragEnd={handleDragEnd}
+              className={`px-5 py-3 flex items-center justify-between transition-all ${
+                draggedCircleId === circle.id
+                  ? 'opacity-50'
+                  : dragOverCircleId === circle.id
+                  ? 'bg-bethany-50 border-t-2 border-bethany-400'
+                  : 'hover:bg-cream'
+              } ${isReordering ? 'cursor-wait' : 'cursor-grab active:cursor-grabbing'}`}
             >
               <div className="flex items-center gap-3">
-                <GripVertical className="w-4 h-4 text-charcoal-300" />
+                <GripVertical className={`w-4 h-4 ${isReordering ? 'text-charcoal-200' : 'text-charcoal-300 hover:text-charcoal-500'}`} />
                 <div>
                   <p className="font-medium text-charcoal">{circle.name}</p>
                   <p className="text-xs text-charcoal-light">
