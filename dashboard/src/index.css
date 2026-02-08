@@ -24,10 +24,18 @@
     --color-sage-light: #a8c4ae;
     --color-golden: #c9a962;
     --color-blush: #e8d5cf;
+    
+    /* Safe area insets for notched devices */
+    --safe-area-top: env(safe-area-inset-top, 0px);
+    --safe-area-bottom: env(safe-area-inset-bottom, 0px);
+    --safe-area-left: env(safe-area-inset-left, 0px);
+    --safe-area-right: env(safe-area-inset-right, 0px);
   }
 
   html {
     scroll-behavior: smooth;
+    /* Prevent iOS bounce/overscroll on html element */
+    overscroll-behavior: none;
   }
 
   body {
@@ -41,7 +49,14 @@
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     min-height: 100vh;
+    /* Use dvh for mobile to account for browser chrome */
+    min-height: 100dvh;
     margin: 0;
+    /* Prevent text size adjustment on orientation change */
+    -webkit-text-size-adjust: 100%;
+    /* Support notched devices */
+    padding-top: var(--safe-area-top);
+    padding-bottom: var(--safe-area-bottom);
   }
 
   h1, h2, h3, h4, h5, h6 {
@@ -56,6 +71,16 @@
     outline: 2px solid var(--color-terracotta);
     outline-offset: 2px;
   }
+  
+  /* Remove default tap highlight on mobile */
+  * {
+    -webkit-tap-highlight-color: transparent;
+  }
+  
+  /* Ensure proper input sizing on iOS */
+  input, textarea, select {
+    font-size: 16px; /* Prevents iOS zoom on focus */
+  }
 }
 
 /* ==========================================================================
@@ -64,23 +89,38 @@
 
 @layer components {
   /* Primary Button - Terracotta with warm shadow */
+  /* Minimum 44x44px touch target for accessibility */
   .btn-primary {
-    @apply inline-flex items-center justify-center px-6 py-3
+    @apply inline-flex items-center justify-center gap-2 px-6 py-3
            text-base font-medium text-warm-white
            rounded-xl transition-all duration-200
            shadow-warm hover:shadow-medium
            transform hover:-translate-y-0.5
            disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none;
     background-color: var(--color-terracotta);
+    min-height: 44px;
+    min-width: 44px;
   }
 
   .btn-primary:hover:not(:disabled) {
     background-color: var(--color-terracotta-dark);
   }
+  
+  /* Touch-friendly button on mobile */
+  @media (hover: none) and (pointer: coarse) {
+    .btn-primary:active:not(:disabled) {
+      transform: scale(0.98);
+      background-color: var(--color-terracotta-dark);
+    }
+    
+    .btn-primary:hover:not(:disabled) {
+      transform: none;
+    }
+  }
 
   /* Secondary Button - Outlined */
   .btn-secondary {
-    @apply inline-flex items-center justify-center px-6 py-3
+    @apply inline-flex items-center justify-center gap-2 px-6 py-3
            text-base font-medium rounded-xl
            border-2 transition-all duration-200
            hover:shadow-soft
@@ -88,11 +128,20 @@
     color: var(--color-terracotta);
     border-color: var(--color-terracotta);
     background-color: transparent;
+    min-height: 44px;
+    min-width: 44px;
   }
 
   .btn-secondary:hover:not(:disabled) {
     background-color: var(--color-terracotta);
     color: var(--color-warm-white);
+  }
+  
+  @media (hover: none) and (pointer: coarse) {
+    .btn-secondary:active:not(:disabled) {
+      background-color: var(--color-terracotta);
+      color: var(--color-warm-white);
+    }
   }
 
   /* Ghost Button - Minimal */
@@ -101,6 +150,8 @@
            text-sm font-medium rounded-lg
            transition-all duration-200;
     color: var(--color-charcoal-light);
+    min-height: 44px;
+    min-width: 44px;
   }
 
   .btn-ghost:hover {
@@ -116,6 +167,8 @@
     background-color: var(--color-warm-white);
     border-color: var(--color-cream-dark);
     color: var(--color-charcoal);
+    /* Ensure minimum touch target height */
+    min-height: 48px;
   }
 
   .input-field:focus {
@@ -138,6 +191,13 @@
   .card {
     @apply rounded-2xl p-6 shadow-soft;
     background-color: var(--color-warm-white);
+  }
+  
+  /* Smaller padding on mobile */
+  @media (max-width: 640px) {
+    .card {
+      @apply p-4;
+    }
   }
 
   .card-header {
@@ -176,13 +236,13 @@
 
   /* Section headings */
   .section-heading {
-    @apply text-3xl md:text-4xl mb-4;
+    @apply text-2xl sm:text-3xl md:text-4xl mb-4;
     font-family: 'Fraunces', Georgia, serif;
     color: var(--color-charcoal);
   }
 
   .section-subheading {
-    @apply text-lg md:text-xl;
+    @apply text-base sm:text-lg md:text-xl;
     color: var(--color-charcoal-light);
   }
 
@@ -190,6 +250,7 @@
   .nav-item {
     @apply flex items-center gap-3 px-3 py-2 rounded-xl text-sm font-medium transition-colors;
     color: var(--color-charcoal-light);
+    min-height: 44px;
   }
 
   .nav-item:hover {
@@ -200,6 +261,67 @@
   .nav-item.active {
     background-color: rgba(196, 112, 94, 0.1);
     color: var(--color-terracotta-dark);
+  }
+  
+  /* Mobile-first modal */
+  .modal-overlay {
+    @apply fixed inset-0 bg-charcoal/50 z-50 backdrop-blur-sm;
+  }
+  
+  .modal-container {
+    @apply fixed inset-0 z-50 flex items-end sm:items-center justify-center;
+    padding-bottom: var(--safe-area-bottom);
+  }
+  
+  .modal-content {
+    @apply bg-warm-white shadow-xl w-full max-h-[90vh] overflow-hidden flex flex-col;
+    /* Full width with rounded top corners on mobile */
+    @apply rounded-t-2xl sm:rounded-2xl;
+    /* Max width on larger screens */
+    @apply sm:max-w-lg sm:mx-4;
+  }
+  
+  /* Scrollable horizontal tab bar */
+  .tab-bar {
+    @apply flex gap-1 overflow-x-auto pb-px;
+    /* Hide scrollbar but keep functionality */
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    /* Enable momentum scrolling on iOS */
+    -webkit-overflow-scrolling: touch;
+    /* Fade indicator on edges */
+    mask-image: linear-gradient(to right, transparent, black 8px, black calc(100% - 8px), transparent);
+    -webkit-mask-image: linear-gradient(to right, transparent, black 8px, black calc(100% - 8px), transparent);
+  }
+  
+  .tab-bar::-webkit-scrollbar {
+    display: none;
+  }
+  
+  /* Touch-friendly icon button */
+  .icon-btn {
+    @apply p-2 rounded-xl transition-colors;
+    min-width: 44px;
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  
+  .icon-btn:hover {
+    background-color: var(--color-cream-dark);
+  }
+  
+  /* Mobile-friendly action bar (bulk actions, etc.) */
+  .action-bar {
+    @apply fixed left-4 right-4 z-30 bg-charcoal text-warm-white rounded-2xl shadow-2xl px-4 py-3;
+    bottom: calc(16px + var(--safe-area-bottom));
+  }
+  
+  @media (min-width: 640px) {
+    .action-bar {
+      @apply left-1/2 -translate-x-1/2 right-auto w-auto px-5;
+    }
   }
 }
 
@@ -242,6 +364,41 @@
   .animate-fade-in {
     animation: fadeIn 0.4s ease-out forwards;
   }
+  
+  /* Hide scrollbar utility */
+  .scrollbar-hide {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+  
+  /* Safe area padding utilities */
+  .pb-safe {
+    padding-bottom: var(--safe-area-bottom);
+  }
+  
+  .pt-safe {
+    padding-top: var(--safe-area-top);
+  }
+  
+  .mb-safe {
+    margin-bottom: var(--safe-area-bottom);
+  }
+  
+  /* Touch target size utility */
+  .touch-target {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  
+  /* Prevent text selection on UI elements */
+  .no-select {
+    -webkit-user-select: none;
+    user-select: none;
+  }
 }
 
 @keyframes fadeUp {
@@ -274,16 +431,32 @@
   margin-top: 0.5rem;
 }
 
-/* Checkbox custom styling */
+/* Checkbox custom styling - larger touch target */
 input[type="checkbox"] {
   accent-color: var(--color-terracotta);
-  width: 1.125rem;
-  height: 1.125rem;
+  width: 1.25rem;
+  height: 1.25rem;
+  cursor: pointer;
+}
+
+/* Larger checkbox touch area */
+label:has(input[type="checkbox"]) {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
 }
 
 /* Phone input styling */
 input[type="tel"] {
   letter-spacing: 0.02em;
+}
+
+/* Date input styling for mobile */
+input[type="date"] {
+  min-height: 48px;
+  /* Fix for iOS date input */
+  -webkit-appearance: none;
+  appearance: none;
 }
 
 /* ==========================================================================
@@ -308,4 +481,64 @@ input[type="tel"] {
 
 ::-webkit-scrollbar-thumb:hover {
   opacity: 0.7;
+}
+
+/* Hide scrollbar on mobile for cleaner look */
+@media (max-width: 640px) {
+  ::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+  }
+}
+
+/* ==========================================================================
+   Mobile-specific overrides
+   ========================================================================== */
+
+@media (max-width: 640px) {
+  /* Reduce heading sizes on mobile */
+  h1 {
+    font-size: 1.5rem;
+  }
+  
+  h2 {
+    font-size: 1.25rem;
+  }
+  
+  /* Ensure adequate spacing between interactive elements */
+  button + button,
+  a + a {
+    margin-left: 0.5rem;
+  }
+  
+  /* Stack buttons on very small screens */
+  .btn-stack-mobile {
+    @apply flex-col w-full;
+  }
+  
+  .btn-stack-mobile > button,
+  .btn-stack-mobile > a {
+    @apply w-full;
+    margin-left: 0 !important;
+    margin-top: 0.5rem;
+  }
+  
+  .btn-stack-mobile > button:first-child,
+  .btn-stack-mobile > a:first-child {
+    margin-top: 0;
+  }
+}
+
+/* ==========================================================================
+   Print styles
+   ========================================================================== */
+
+@media print {
+  body {
+    background: white;
+  }
+  
+  .no-print {
+    display: none !important;
+  }
 }
