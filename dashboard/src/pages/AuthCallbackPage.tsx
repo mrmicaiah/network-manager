@@ -13,7 +13,7 @@ import { useAuth } from '../context/AuthContext';
 export function AuthCallbackPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const { isAuthenticated, isLoading, refreshAuth } = useAuth();
+  const { isAuthenticated, isLoading, refreshUser } = useAuth();
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -57,7 +57,7 @@ export function AuthCallbackPage() {
       // to properly refresh the auth state
       if (response.type === 'opaqueredirect' || response.status === 302) {
         // Cookie should be set, refresh auth and redirect
-        await refreshAuth();
+        await refreshUser();
         navigate('/welcome', { replace: true });
       } else if (!response.ok) {
         setError('Failed to complete login. Please try logging in manually.');
