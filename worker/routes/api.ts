@@ -13,7 +13,7 @@
  *   /api/braindump/*     — Parse natural language contact dumps
  *   /api/export/*        — CSV export with filters
  *   /api/import/*        — CSV import and bulk import flow
- *   /api/user/*          — Profile read/update
+ *   /api/user/*          — Profile read/update, notification preferences
  *   /api/subscription/*  — Tier info, checkout, portal
  *   /api/dashboard/*     — Dashboard tabs and dartboard data
  *   /api/stripe/webhook  — Stripe webhook handler (no auth)
@@ -89,6 +89,8 @@ import type {
   ContactKind,
   InteractionMethod,
   CircleType,
+  NudgeFrequency,
+  UpdateNotificationPreferencesInput,
 } from '../../shared/models';
 
 // ===========================================================================
@@ -206,6 +208,10 @@ export async function handleApiRoute(
       response = await handleUpdateUser(request, db, user.id);
     } else if (path === '/api/user/preferences' && method === 'PATCH') {
       response = await handleUpdateUserPreferences(request, db, user.id);
+    } else if (path === '/api/user/notifications' && method === 'GET') {
+      response = await handleGetNotificationPreferences(db, user.id);
+    } else if (path === '/api/user/notifications' && method === 'PATCH') {
+      response = await handleUpdateNotificationPreferences(request, db, user.id);
 
     // ─── Subscription ─────────────────────────────────────────
     } else if (path === '/api/subscription' && method === 'GET') {
@@ -742,6 +748,12 @@ async function handleGetUser(auth: AuthContext): Promise<Response> {
       onboardingStage: user.onboarding_stage,
       defaultCircleId: user.default_circle_id,
       circleTabOrder: user.circle_tab_order ? JSON.parse(user.circle_tab_order) : null,
+      // Notification preferences
+      timezone: user.timezone,
+      preferredNudgeHour: user.preferred_nudge_hour,
+      nudgeFrequency: user.nudge_frequency,
+      quietHoursStart: user.quiet_hours_start,
+      quietHoursEnd: user.quiet_hours_end,
       createdAt: user.created_at,
     },
   });
@@ -834,6 +846,175 @@ async function handleUpdateUserPreferences(
     .run();
 
   return jsonResponse({ data: { updated: true } });
+}
+
+// ===========================================================================
+// Notification Preferences Handlers
+// ===========================================================================
+
+/**
+ * Get notification preferences for the current user.
+ */
+async function handleGetNotificationPreferences(
+  db: D1Database,
+  userId: string,
+): Promise<Response> {
+  const user = await db
+    .prepare(
+      `SELECT timezone, preferred_nudge_hour, nudge_frequency, 
+              quiet_hours_start, quiet_hours_end
+       FROM users WHERE id = ?`
+    )
+    .bind(userId)
+    .first<{
+      timezone: string;
+      preferred_nudge_hour: number;
+      nudge_frequency: NudgeFrequency;
+      quiet_hours_start: string | null;
+      quiet_hours_end: string | null;
+    }>();
+
+  if (!user) {
+    return errorResponse('User not found', 404);
+  }
+
+  return jsonResponse({
+    data: {
+      timezone: user.timezone,
+      preferredNudgeHour: user.preferred_nudge_hour,
+      nudgeFrequency: user.nudge_frequency,
+      quietHoursStart: user.quiet_hours_start,
+      quietHoursEnd: user.quiet_hours_end,
+    },
+  });
+}
+
+/**
+ * Update notification preferences for the current user.
+ *
+ * Validates:
+ *   - timezone is a valid IANA timezone
+ *   - preferred_nudge_hour is 0-23
+ *   - nudge_frequency is 'daily', 'weekly', or 'as_needed'
+ *   - quiet_hours_start/end are both set or both null
+ *   - quiet hours are in HH:MM format
+ */
+async function handleUpdateNotificationPreferences(
+  request: Request,
+  db: D1Database,
+  userId: string,
+): Promise<Response> {
+  const body = await request.json<UpdateNotificationPreferencesInput>();
+
+  const sets: string[] = [];
+  const binds: unknown[] = [];
+
+  // Validate and add timezone
+  if (body.timezone !== undefined) {
+    if (!isValidTimezone(body.timezone)) {
+      return errorResponse('Invalid timezone. Use IANA format (e.g., "America/New_York")', 400);
+    }
+    sets.push('timezone = ?');
+    binds.push(body.timezone);
+  }
+
+  // Validate and add preferred_nudge_hour
+  if (body.preferred_nudge_hour !== undefined) {
+    if (!Number.isInteger(body.preferred_nudge_hour) || body.preferred_nudge_hour < 0 || body.preferred_nudge_hour > 23) {
+      return errorResponse('preferred_nudge_hour must be an integer from 0-23', 400);
+    }
+    sets.push('preferred_nudge_hour = ?');
+    binds.push(body.preferred_nudge_hour);
+  }
+
+  // Validate and add nudge_frequency
+  if (body.nudge_frequency !== undefined) {
+    const validFrequencies: NudgeFrequency[] = ['daily', 'weekly', 'as_needed'];
+    if (!validFrequencies.includes(body.nudge_frequency)) {
+      return errorResponse('nudge_frequency must be "daily", "weekly", or "as_needed"', 400);
+    }
+    sets.push('nudge_frequency = ?');
+    binds.push(body.nudge_frequency);
+  }
+
+  // Validate quiet hours — both must be set or both null
+  const hasStart = body.quiet_hours_start !== undefined;
+  const hasEnd = body.quiet_hours_end !== undefined;
+
+  if (hasStart || hasEnd) {
+    // If either is being set, validate both
+    const quietStart = hasStart ? body.quiet_hours_start : null;
+    const quietEnd = hasEnd ? body.quiet_hours_end : null;
+
+    // Both must be null or both must be valid times
+    if ((quietStart === null) !== (quietEnd === null)) {
+      // One is null, one isn't — check if we need to fetch the other
+      const current = await db
+        .prepare('SELECT quiet_hours_start, quiet_hours_end FROM users WHERE id = ?')
+        .bind(userId)
+        .first<{ quiet_hours_start: string | null; quiet_hours_end: string | null }>();
+
+      const effectiveStart = hasStart ? quietStart : current?.quiet_hours_start ?? null;
+      const effectiveEnd = hasEnd ? quietEnd : current?.quiet_hours_end ?? null;
+
+      if ((effectiveStart === null) !== (effectiveEnd === null)) {
+        return errorResponse('quiet_hours_start and quiet_hours_end must both be set or both be null', 400);
+      }
+    }
+
+    // Validate time format if not null
+    if (quietStart !== null && !isValidTimeFormat(quietStart)) {
+      return errorResponse('quiet_hours_start must be in HH:MM format (e.g., "22:00")', 400);
+    }
+    if (quietEnd !== null && !isValidTimeFormat(quietEnd)) {
+      return errorResponse('quiet_hours_end must be in HH:MM format (e.g., "08:00")', 400);
+    }
+
+    if (hasStart) {
+      sets.push('quiet_hours_start = ?');
+      binds.push(quietStart);
+    }
+    if (hasEnd) {
+      sets.push('quiet_hours_end = ?');
+      binds.push(quietEnd);
+    }
+  }
+
+  if (sets.length === 0) {
+    return errorResponse('No preferences to update', 400);
+  }
+
+  sets.push("updated_at = datetime('now')");
+  binds.push(userId);
+
+  await db
+    .prepare(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`)
+    .bind(...binds)
+    .run();
+
+  // Return updated preferences
+  return handleGetNotificationPreferences(db, userId);
+}
+
+/**
+ * Validate that a string is a valid IANA timezone.
+ */
+function isValidTimezone(tz: string): boolean {
+  try {
+    // Try to create a DateTimeFormat with the timezone
+    new Intl.DateTimeFormat('en-US', { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Validate that a string is in HH:MM format.
+ */
+function isValidTimeFormat(time: string): boolean {
+  const match = time.match(/^([01]?[0-9]|2[0-3]):([0-5][0-9])$/);
+  return match !== null;
 }
 
 // ===========================================================================
