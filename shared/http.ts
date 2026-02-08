@@ -27,18 +27,22 @@ export function getCorsHeaders(requestOrigin?: string | null): Record<string, st
   };
 }
 
-/** Default CORS headers (for backwards compatibility) */
+/** 
+ * Default CORS headers - uses first allowed origin.
+ * For backwards compatibility, but prefer getCorsHeaders() with the request origin.
+ */
 export const corsHeaders: Record<string, string> = {
-  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Origin': 'https://network-manager.pages.dev',
   'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-API-Key',
+  'Access-Control-Allow-Credentials': 'true',
 };
 
 export function jsonResponse(data: unknown, status = 200, origin?: string | null): Response {
   return new Response(JSON.stringify(data, null, 2), {
     status,
     headers: {
-      ...getCorsHeaders(origin),
+      ...(origin ? getCorsHeaders(origin) : corsHeaders),
       'Content-Type': 'application/json',
     },
   });
@@ -49,7 +53,7 @@ export function errorResponse(message: string, status = 400, code?: string, orig
   return new Response(JSON.stringify(body, null, 2), {
     status,
     headers: {
-      ...getCorsHeaders(origin),
+      ...(origin ? getCorsHeaders(origin) : corsHeaders),
       'Content-Type': 'application/json',
     },
   });
@@ -68,7 +72,7 @@ export function jsonResponseWithCookie(
   return new Response(JSON.stringify(data, null, 2), {
     status,
     headers: {
-      ...getCorsHeaders(origin),
+      ...(origin ? getCorsHeaders(origin) : corsHeaders),
       'Content-Type': 'application/json',
       'Set-Cookie': cookie,
     },
