@@ -52,6 +52,7 @@ import type { Env } from '../../shared/types';
 import type { UserRow } from '../../shared/models';
 import { corsHeaders } from '../../shared/http';
 import { getUserByPhone } from './user-service';
+import { getUserRoles, getUserPermissions } from './permission-service';
 
 // ===========================================================================
 // Configuration
@@ -749,8 +750,8 @@ export async function handleLogout(): Promise<Response> {
 /**
  * Handle GET /api/auth/me
  *
- * Returns the current user's info if authenticated.
- * Used by the dashboard to check session state on load.
+ * Returns the current user's info including RBAC roles and permissions.
+ * Used by the dashboard to check session state and determine admin access.
  */
 export async function handleGetMe(
   request: Request,
@@ -759,6 +760,12 @@ export async function handleGetMe(
   const auth = await requireAuth(request, env);
   if (!auth.valid) return auth.response;
 
+  // Fetch roles and permissions in parallel
+  const [roles, permissions] = await Promise.all([
+    getUserRoles(env.DB, auth.auth.user.id),
+    getUserPermissions(env.DB, auth.auth.user.id),
+  ]);
+
   let response = jsonAuthResponse({
     user: {
       id: auth.auth.user.id,
@@ -766,6 +773,8 @@ export async function handleGetMe(
       phone: auth.auth.user.phone,
       email: auth.auth.user.email,
       subscriptionTier: auth.auth.user.subscription_tier,
+      roles,
+      permissions,
     },
   });
 
