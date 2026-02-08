@@ -6,14 +6,18 @@ import { useAuth } from '../context/AuthContext';
  * Auth Callback Page
  * 
  * Handles the redirect from signup with a one-time login token.
- * The worker's /auth/callback endpoint sets the session cookie and redirects here.
  * 
- * This page just checks if we're authenticated and redirects accordingly.
+ * Flow:
+ * 1. User signs up on marketing site
+ * 2. Marketing site redirects to: /auth/callback?token=xxx
+ * 3. This page redirects to the worker: /auth/callback?token=xxx
+ * 4. Worker validates token, sets session cookie, redirects to /welcome
+ * 5. /welcome page loads with valid session
  */
 export function AuthCallbackPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const { isAuthenticated, isLoading, refreshUser } = useAuth();
+  const { isAuthenticated, isLoading } = useAuth();
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -25,10 +29,12 @@ export function AuthCallbackPage() {
       return;
     }
 
-    // If we have a token, we need to exchange it via the API
-    // The API will set the cookie and we'll redirect
+    // If we have a token, redirect to the worker to exchange it
+    // The worker will set the cookie and redirect back to /welcome
     if (token) {
-      exchangeToken(token);
+      const apiUrl = import.meta.env.VITE_API_URL || 'https://network-manager.micaiah-tasks.workers.dev';
+      // Full page redirect - this allows the cookie to be set properly
+      window.location.href = `${apiUrl}/auth/callback?token=${token}`;
       return;
     }
 
@@ -41,32 +47,6 @@ export function AuthCallbackPage() {
       }
     }
   }, [searchParams, isAuthenticated, isLoading, navigate]);
-
-  const exchangeToken = async (token: string) => {
-    try {
-      const apiUrl = import.meta.env.VITE_API_URL || 'https://network-manager.micaiah-tasks.workers.dev';
-      
-      // Call the auth callback endpoint which will set the cookie
-      const response = await fetch(`${apiUrl}/auth/callback?token=${token}`, {
-        method: 'GET',
-        credentials: 'include',
-        redirect: 'manual', // Don't follow redirects automatically
-      });
-
-      // The API returns a redirect, but we want to handle it ourselves
-      // to properly refresh the auth state
-      if (response.type === 'opaqueredirect' || response.status === 302) {
-        // Cookie should be set, refresh auth and redirect
-        await refreshUser();
-        navigate('/welcome', { replace: true });
-      } else if (!response.ok) {
-        setError('Failed to complete login. Please try logging in manually.');
-      }
-    } catch (err) {
-      console.error('Token exchange failed:', err);
-      setError('Something went wrong. Please try logging in manually.');
-    }
-  };
 
   const getErrorMessage = (code: string): string => {
     switch (code) {
