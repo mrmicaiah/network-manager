@@ -9,18 +9,20 @@
  *   3. Delivering nudges via SMS through SendBlue (sendNudge)
  *   4. Tracking nudge status (markNudgeDelivered, markNudgeDismissed, etc.)
  *
+ * Notification Preferences:
+ *
+ *   Users can configure:
+ *   - nudge_frequency: 'daily', 'weekly', or 'as_needed'
+ *   - quiet_hours_start/end: time window when no SMS should be sent
+ *   - timezone: IANA timezone for local time calculations
+ *   - preferred_nudge_hour: when to deliver nudges (0-23)
+ *
  * Cron Integration:
  *
  *   The scheduled jobs in worker/cron/scheduled.ts call into this service:
  *
- *   - dailyNudgeGeneration (3am Central) — Premium/trial users
- *     Generates up to 3-5 nudges per user, scheduled for 8am delivery
- *
- *   - weeklyNudgeGeneration (Monday 3am Central) — Free users
- *     Generates a single weekly digest with up to 3 contacts
- *
- *   - nudgeDelivery (8am Central) — All users
- *     Sends all pending nudges scheduled for today
+ *   - hourlyNudgeProcessing — Checks each user's preferred_nudge_hour
+ *     and timezone, generates and delivers nudges at that time
  *
  * Smart Grouping (Premium):
  *
@@ -34,11 +36,10 @@
  *   Free users get a consolidated Monday morning message listing their
  *   top 3 contacts needing attention, formatted as a single SMS.
  *
- * Timezone Awareness:
+ * Quiet Hours:
  *
- *   Nudges are scheduled for delivery in a user-friendly window (8am local).
- *   Currently uses a Central Time default; future: respect user's timezone
- *   preference if set.
+ *   Before sending any SMS, the service checks if the current time falls
+ *   within the user's quiet hours window. If so, delivery is deferred.
  *
  * Duplicate Prevention:
  *
@@ -48,7 +49,7 @@
  *
  * @see shared/intent-config.ts for nudge templates and health calculation
  * @see worker/cron/scheduled.ts for cron trigger integration
- * @see shared/models.ts for NudgeRow, NudgeStatus types
+ * @see shared/models.ts for NudgeRow, NudgeStatus, NudgeFrequency types
  */
 
 import type { Env } from '../../shared/types';
@@ -61,6 +62,7 @@ import type {
   HealthStatus,
   ContactKind,
   UserGender,
+  NudgeFrequency,
 } from '../../shared/models';
 import { FREE_TIER_LIMITS } from '../../shared/models';
 import {
@@ -85,11 +87,8 @@ const FREE_WEEKLY_DIGEST_LIMIT = 3;
 /** Hours after delivery before a nudge "ages out" and a new one can be created */
 const NUDGE_COOLDOWN_HOURS = 48;
 
-/** Default timezone offset for scheduling (Central Time = UTC-6, or -5 during DST) */
-const DEFAULT_TIMEZONE_OFFSET_HOURS = -6;
-
-/** Delivery window hour (8am in user's timezone) */
-const DELIVERY_HOUR = 8;
+/** Delivery window hour (8am in user's timezone) - now configurable per user */
+const DEFAULT_DELIVERY_HOUR = 8;
 
 // ===========================================================================
 // Types
@@ -132,6 +131,7 @@ export interface NudgeGenerationResult {
   nudgesCreated: number;
   contactsConsidered: number;
   skippedDueToCooldown: number;
+  skippedDueToFrequency?: boolean;
 }
 
 /**
@@ -141,6 +141,115 @@ export interface NudgeDeliveryResult {
   nudgeId: string;
   success: boolean;
   error?: string;
+  skippedDueToQuietHours?: boolean;
+}
+
+/**
+ * User notification preferences for nudge delivery.
+ */
+interface UserNotificationPrefs {
+  timezone: string;
+  preferred_nudge_hour: number;
+  nudge_frequency: NudgeFrequency;
+  quiet_hours_start: string | null;
+  quiet_hours_end: string | null;
+}
+
+// ===========================================================================
+// Quiet Hours Checking
+// ===========================================================================
+
+/**
+ * Check if the current time is within a user's quiet hours.
+ *
+ * Quiet hours can span midnight (e.g., 22:00 to 08:00).
+ * Returns true if we should NOT send SMS right now.
+ *
+ * @param quietStart - Start time in HH:MM format (e.g., "22:00")
+ * @param quietEnd - End time in HH:MM format (e.g., "08:00")
+ * @param timezone - IANA timezone (e.g., "America/New_York")
+ * @param now - Optional override for current time (for testing)
+ */
+export function isInQuietHours(
+  quietStart: string | null,
+  quietEnd: string | null,
+  timezone: string,
+  now?: Date,
+): boolean {
+  // If quiet hours aren't configured, never block
+  if (!quietStart || !quietEnd) {
+    return false;
+  }
+
+  const currentTime = now ?? new Date();
+
+  // Get current time in user's timezone
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: timezone,
+    hour: 'numeric',
+    minute: 'numeric',
+    hour12: false,
+  });
+
+  let currentHour: number;
+  let currentMinute: number;
+
+  try {
+    const parts = formatter.formatToParts(currentTime);
+    currentHour = parseInt(parts.find(p => p.type === 'hour')?.value ?? '0', 10);
+    currentMinute = parseInt(parts.find(p => p.type === 'minute')?.value ?? '0', 10);
+  } catch {
+    // Invalid timezone, assume not in quiet hours
+    console.warn(`[nudge] Invalid timezone: ${timezone}`);
+    return false;
+  }
+
+  // Parse quiet hours
+  const [startHour, startMinute] = quietStart.split(':').map(Number);
+  const [endHour, endMinute] = quietEnd.split(':').map(Number);
+
+  // Convert to minutes since midnight for easier comparison
+  const currentMinutes = currentHour * 60 + currentMinute;
+  const startMinutes = startHour * 60 + startMinute;
+  const endMinutes = endHour * 60 + endMinute;
+
+  // Handle quiet hours that span midnight (e.g., 22:00 to 08:00)
+  if (startMinutes > endMinutes) {
+    // Quiet hours span midnight
+    // In quiet hours if: current >= start OR current < end
+    return currentMinutes >= startMinutes || currentMinutes < endMinutes;
+  } else {
+    // Normal range (e.g., 08:00 to 18:00)
+    // In quiet hours if: start <= current < end
+    return currentMinutes >= startMinutes && currentMinutes < endMinutes;
+  }
+}
+
+/**
+ * Check if a user should receive nudges based on their frequency preference.
+ *
+ * @param frequency - User's nudge_frequency preference
+ * @param healthStatus - The contact's health status (for 'as_needed' mode)
+ * @param isWeeklyRun - Whether this is the weekly Monday run
+ */
+export function shouldGenerateNudge(
+  frequency: NudgeFrequency,
+  healthStatus: HealthStatus,
+  isWeeklyRun: boolean,
+): boolean {
+  switch (frequency) {
+    case 'daily':
+      // Daily users get nudges every day
+      return true;
+    case 'weekly':
+      // Weekly users only get nudges on Monday (weekly run)
+      return isWeeklyRun;
+    case 'as_needed':
+      // As-needed users only get nudges for red/critical contacts
+      return healthStatus === 'red';
+    default:
+      return true;
+  }
 }
 
 // ===========================================================================
@@ -302,10 +411,12 @@ function generateNudgeReason(
 /**
  * Generate nudges for a single user.
  *
- * For premium/trial users: Creates individual nudges for top priority contacts.
- * For free users (weekly mode): Creates a single digest nudge.
+ * Respects user's nudge_frequency preference:
+ * - 'daily': Creates individual nudges for top priority contacts
+ * - 'weekly': Creates a single digest nudge (only on Monday runs)
+ * - 'as_needed': Only creates nudges for red/critical contacts
  *
- * Nudges are scheduled for the next delivery window (8am user time).
+ * Nudges are scheduled for the next delivery window (user's preferred hour).
  * Respects cooldown period — won't create a new nudge for a contact
  * if they have a pending or recently delivered nudge.
  *
@@ -323,17 +434,26 @@ export async function generateNudgesForUser(
   now?: Date,
 ): Promise<NudgeGenerationResult> {
   const currentTime = now ?? new Date();
-  const weekly = options?.weekly ?? false;
-  const maxNudges = options?.maxNudges ?? (weekly ? FREE_WEEKLY_DIGEST_LIMIT : PREMIUM_DAILY_NUDGE_LIMIT);
+  const isWeeklyRun = options?.weekly ?? false;
 
-  // Get user for gender preferences
+  // Get user with notification preferences
   const user = await db
-    .prepare('SELECT id, gender FROM users WHERE id = ?')
+    .prepare('SELECT id, gender, nudge_frequency, timezone, preferred_nudge_hour FROM users WHERE id = ?')
     .bind(userId)
-    .first<Pick<UserRow, 'id' | 'gender'>>();
+    .first<Pick<UserRow, 'id' | 'gender' | 'nudge_frequency' | 'timezone' | 'preferred_nudge_hour'>>();
 
   if (!user) {
     return { userId, nudgesCreated: 0, contactsConsidered: 0, skippedDueToCooldown: 0 };
+  }
+
+  const nudgeFrequency = user.nudge_frequency ?? 'daily';
+
+  // Determine max nudges based on frequency and tier
+  let maxNudges: number;
+  if (nudgeFrequency === 'weekly' || isWeeklyRun) {
+    maxNudges = options?.maxNudges ?? FREE_WEEKLY_DIGEST_LIMIT;
+  } else {
+    maxNudges = options?.maxNudges ?? PREMIUM_DAILY_NUDGE_LIMIT;
   }
 
   // Get contacts needing attention
@@ -343,14 +463,33 @@ export async function generateNudgesForUser(
     return { userId, nudgesCreated: 0, contactsConsidered: 0, skippedDueToCooldown: 0 };
   }
 
-  // Calculate scheduled delivery time
-  const scheduledFor = options?.scheduledFor ?? calculateNextDeliveryTime(currentTime);
+  // Filter contacts based on nudge frequency preference
+  const eligibleByFrequency = contacts.filter(contact =>
+    shouldGenerateNudge(nudgeFrequency, contact.healthStatus, isWeeklyRun)
+  );
+
+  if (eligibleByFrequency.length === 0) {
+    return {
+      userId,
+      nudgesCreated: 0,
+      contactsConsidered: contacts.length,
+      skippedDueToCooldown: 0,
+      skippedDueToFrequency: true,
+    };
+  }
+
+  // Calculate scheduled delivery time using user's timezone and preferred hour
+  const scheduledFor = options?.scheduledFor ?? calculateNextDeliveryTime(
+    currentTime,
+    user.timezone ?? 'America/Chicago',
+    user.preferred_nudge_hour ?? DEFAULT_DELIVERY_HOUR,
+  );
 
   // Check for cooldown on each contact
   const eligibleContacts: ContactNeedingAttention[] = [];
   let skippedDueToCooldown = 0;
 
-  for (const contact of contacts) {
+  for (const contact of eligibleByFrequency) {
     const hasCooldown = await hasRecentNudge(db, userId, contact.contactId, currentTime);
     if (hasCooldown) {
       skippedDueToCooldown++;
@@ -369,8 +508,8 @@ export async function generateNudgesForUser(
     };
   }
 
-  // For weekly digest (free tier), create a single combined nudge
-  if (weekly) {
+  // For weekly digest or weekly frequency, create a single combined nudge
+  if (isWeeklyRun || nudgeFrequency === 'weekly') {
     await createDigestNudge(db, userId, eligibleContacts, scheduledFor);
     await incrementUsage(db, userId, 'nudges_generated', 1, currentTime);
     return {
@@ -486,26 +625,67 @@ async function createDigestNudge(
 }
 
 /**
- * Calculate the next delivery window time.
- * Defaults to 8am next day if called before 3am, or 8am same day if after 3am.
+ * Calculate the next delivery window time based on user's timezone and preferred hour.
+ *
+ * @param now - Current time
+ * @param timezone - User's IANA timezone
+ * @param preferredHour - User's preferred delivery hour (0-23)
  */
-function calculateNextDeliveryTime(now: Date): string {
-  const deliveryDate = new Date(now);
+function calculateNextDeliveryTime(
+  now: Date,
+  timezone: string,
+  preferredHour: number,
+): string {
+  try {
+    // Get current time in user's timezone
+    const formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: 'numeric',
+      hour12: false,
+    });
 
-  // Adjust for timezone (assume Central Time for now)
-  const utcHour = now.getUTCHours();
-  const centralHour = utcHour + DEFAULT_TIMEZONE_OFFSET_HOURS;
+    const parts = formatter.formatToParts(now);
+    const currentHour = parseInt(parts.find(p => p.type === 'hour')?.value ?? '0', 10);
 
-  // If it's before 3am Central, schedule for 8am today
-  // Otherwise, schedule for 8am tomorrow
-  if (centralHour >= 3) {
+    // Determine if we need to schedule for today or tomorrow
+    const deliveryDate = new Date(now);
+
+    if (currentHour >= preferredHour) {
+      // Already past preferred hour, schedule for tomorrow
+      deliveryDate.setDate(deliveryDate.getDate() + 1);
+    }
+
+    // Set the delivery time to preferred hour in the user's timezone
+    // We approximate by setting UTC hours based on timezone offset
+    const tzOffset = getTimezoneOffsetHours(timezone, deliveryDate);
+    const utcHour = (preferredHour - tzOffset + 24) % 24;
+
+    deliveryDate.setUTCHours(utcHour, 0, 0, 0);
+
+    return deliveryDate.toISOString();
+  } catch {
+    // Fallback to simple UTC calculation
+    const deliveryDate = new Date(now);
     deliveryDate.setUTCDate(deliveryDate.getUTCDate() + 1);
+    deliveryDate.setUTCHours(14, 0, 0, 0); // 8am Central as fallback
+    return deliveryDate.toISOString();
   }
+}
 
-  // Set to 8am Central = 14:00 UTC (during standard time)
-  deliveryDate.setUTCHours(14, 0, 0, 0);
-
-  return deliveryDate.toISOString();
+/**
+ * Get timezone offset in hours for a given timezone and date.
+ */
+function getTimezoneOffsetHours(timezone: string, date: Date): number {
+  try {
+    const utcDate = new Date(date.toLocaleString('en-US', { timeZone: 'UTC' }));
+    const tzDate = new Date(date.toLocaleString('en-US', { timeZone: timezone }));
+    return (tzDate.getTime() - utcDate.getTime()) / (1000 * 60 * 60);
+  } catch {
+    return -6; // Default to Central Time
+  }
 }
 
 // ===========================================================================
@@ -515,17 +695,28 @@ function calculateNextDeliveryTime(now: Date): string {
 /**
  * Send a single nudge via SMS.
  *
+ * Checks quiet hours before sending. If the user is in quiet hours,
+ * the nudge is not sent but marked as skipped (to be retried later).
+ *
  * Uses SendBlue API to deliver the message. Updates nudge status
  * to 'delivered' on success, logs error on failure (status unchanged
  * so it can be retried).
  *
  * @param env   - Worker environment with SendBlue credentials
- * @param nudge - The nudge to deliver (must include user's phone)
+ * @param nudge - The nudge to deliver (must include user's phone and prefs)
  */
 export async function sendNudge(
   env: Env,
-  nudge: NudgeRow & { userPhone: string },
+  nudge: NudgeRow & { userPhone: string; quietHoursStart?: string | null; quietHoursEnd?: string | null; timezone?: string },
 ): Promise<NudgeDeliveryResult> {
+  // Check quiet hours
+  if (nudge.quietHoursStart && nudge.quietHoursEnd && nudge.timezone) {
+    if (isInQuietHours(nudge.quietHoursStart, nudge.quietHoursEnd, nudge.timezone)) {
+      console.log(`[nudge:send] Skipping nudge ${nudge.id} - user in quiet hours`);
+      return { nudgeId: nudge.id, success: false, skippedDueToQuietHours: true };
+    }
+  }
+
   try {
     const response = await fetch('https://api.sendblue.co/api/send-message', {
       method: 'POST',
@@ -611,31 +802,44 @@ export async function markNudgeActedOn(
 // ===========================================================================
 
 /**
- * Get pending nudges ready for delivery.
+ * Get pending nudges ready for delivery, including user notification preferences.
  *
  * @param db    - D1 database binding
  * @param limit - Maximum nudges to return (default: 100)
+ * @param userId - Optional: filter to specific user
  * @param now   - Override current time (for testing)
  */
 export async function getPendingNudges(
   db: D1Database,
   limit: number = 100,
+  userId?: string,
   now?: Date,
-): Promise<Array<NudgeRow & { userPhone: string }>> {
+): Promise<Array<NudgeRow & { userPhone: string; quietHoursStart: string | null; quietHoursEnd: string | null; timezone: string }>> {
   const currentTime = (now ?? new Date()).toISOString();
 
+  let query = `
+    SELECT n.*, u.phone as userPhone, u.quiet_hours_start as quietHoursStart, 
+           u.quiet_hours_end as quietHoursEnd, u.timezone
+    FROM nudges n
+    INNER JOIN users u ON n.user_id = u.id
+    WHERE n.status = 'pending'
+      AND n.scheduled_for <= ?
+  `;
+
+  const binds: unknown[] = [currentTime];
+
+  if (userId) {
+    query += ' AND n.user_id = ?';
+    binds.push(userId);
+  }
+
+  query += ' ORDER BY n.scheduled_for ASC LIMIT ?';
+  binds.push(limit);
+
   const { results } = await db
-    .prepare(
-      `SELECT n.*, u.phone as userPhone
-       FROM nudges n
-       INNER JOIN users u ON n.user_id = u.id
-       WHERE n.status = 'pending'
-         AND n.scheduled_for <= ?
-       ORDER BY n.scheduled_for ASC
-       LIMIT ?`
-    )
-    .bind(currentTime, limit)
-    .all<NudgeRow & { userPhone: string }>();
+    .prepare(query)
+    .bind(...binds)
+    .all<NudgeRow & { userPhone: string; quietHoursStart: string | null; quietHoursEnd: string | null; timezone: string }>();
 
   return results;
 }
