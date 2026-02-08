@@ -79,6 +79,7 @@ import {
   getDashboardTabs,
   calculateDartboardData,
   getUnsortedContacts,
+  updateContactScores,
 } from '../services/score-service';
 import type {
   CreateContactInput,
@@ -350,6 +351,11 @@ async function handleCreateContact(
     name: body.name.trim(),
   });
 
+  // If circles were assigned, recalculate scores for the new contact
+  if (body.circle_ids && body.circle_ids.length > 0) {
+    await updateContactScores(db, contact.id);
+  }
+
   return jsonResponse({ data: contact }, 201);
 }
 
@@ -365,6 +371,13 @@ async function handleGetContact(
   return jsonResponse({ data: contact });
 }
 
+/**
+ * Update a contact.
+ *
+ * When intent or circle_ids change, scores are recalculated immediately
+ * rather than waiting for the daily cron job. This ensures the dartboard
+ * reflects changes in real-time.
+ */
 async function handleUpdateContact(
   request: Request,
   path: string,
@@ -376,6 +389,13 @@ async function handleUpdateContact(
 
   const contact = await updateContact(db, userId, contactId, body);
   if (!contact) return errorResponse('Contact not found', 404);
+
+  // Recalculate scores if intent or circle membership changed
+  // Intent change affects the cadence window used for scoring
+  // Circle change affects which circles the contact appears in
+  if (body.intent !== undefined || body.circle_ids !== undefined) {
+    await updateContactScores(db, contactId);
+  }
 
   return jsonResponse({ data: contact });
 }
@@ -418,6 +438,10 @@ async function handleRestoreContact(
   const success = await restoreContact(db, userId, contactId);
 
   if (!success) return errorResponse('Contact not found or not archived', 404);
+
+  // Recalculate scores when restoring a contact
+  await updateContactScores(db, contactId);
+
   return jsonResponse({ data: { restored: true } });
 }
 
