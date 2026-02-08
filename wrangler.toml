@@ -66,5 +66,6 @@ crons = [
 [vars]
 ENVIRONMENT = "production"
 SIGNUP_BASE_URL = "https://app.untitledpublishers.com"
+DASHBOARD_URL = "https://network-manager.pages.dev"
 MAX_FREE_CONTACTS = "15"
 TRIAL_DAYS = "14"
