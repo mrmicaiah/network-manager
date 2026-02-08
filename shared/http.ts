@@ -4,6 +4,7 @@
 
 /** Allowed origins for CORS */
 const ALLOWED_ORIGINS = [
+  'https://bethany-dashboard.pages.dev',
   'https://network-manager-site.pages.dev',
   'https://network-manager.pages.dev',
   'http://localhost:5173',
@@ -32,7 +33,7 @@ export function getCorsHeaders(requestOrigin?: string | null): Record<string, st
  * For backwards compatibility, but prefer getCorsHeaders() with the request origin.
  */
 export const corsHeaders: Record<string, string> = {
-  'Access-Control-Allow-Origin': 'https://network-manager.pages.dev',
+  'Access-Control-Allow-Origin': 'https://bethany-dashboard.pages.dev',
   'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-API-Key',
   'Access-Control-Allow-Credentials': 'true',
