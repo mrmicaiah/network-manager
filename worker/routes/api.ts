@@ -8,7 +8,7 @@
  *
  *   /api/auth/*          — Login, verify, logout, session check
  *   /api/contacts/*      — CRUD, search, health recalculation
- *   /api/circles/*       — CRUD for contact circles
+ *   /api/circles/*       — CRUD for contact circles, reordering
  *   /api/interactions/*  — Log and list interactions (with circle context)
  *   /api/braindump/*     — Parse natural language contact dumps
  *   /api/export/*        — CSV export with filters
@@ -22,11 +22,6 @@
  *
  *   Success: { data: <payload> }
  *   Error:   { error: "message", code?: "error_code" }
- *
- * @see worker/services/auth-service.ts for requireAuth(), withRefreshedSession()
- * @see worker/services/stripe-service.ts for Stripe integration
- * @see worker/services/score-service.ts for dartboard scoring
- * @see shared/http.ts for jsonResponse(), errorResponse()
  */
 
 import type { Env } from '../../shared/types';
@@ -61,6 +56,7 @@ import {
   updateCircle,
   deleteCircle,
   listCirclesWithCounts,
+  reorderCircles,
 } from '../services/circle-service';
 import {
   logInteraction,
@@ -90,7 +86,6 @@ import type {
   HealthStatus,
   ContactKind,
   InteractionMethod,
-  CircleType,
   NudgeFrequency,
   UpdateNotificationPreferencesInput,
 } from '../../shared/models';
@@ -99,11 +94,6 @@ import type {
 // Main Router
 // ===========================================================================
 
-/**
- * Route an /api/* request to the appropriate handler.
- *
- * Called from index.ts when url.pathname.startsWith('/api/').
- */
 export async function handleApiRoute(
   request: Request,
   env: Env,
@@ -113,7 +103,6 @@ export async function handleApiRoute(
   const path = url.pathname;
   const method = request.method;
 
-  // ─── Auth routes (unauthenticated) ──────────────────────────
   if (path === '/api/auth/send-code' && method === 'POST') {
     return handleSendCode(request, env);
   }
@@ -126,31 +115,24 @@ export async function handleApiRoute(
   if (path === '/api/auth/me' && method === 'GET') {
     return handleGetMe(request, env);
   }
-
-  // ─── Stripe webhook (unauthenticated, verified by signature) ─
   if (path === '/api/stripe/webhook' && method === 'POST') {
     return handleStripeWebhook(request, env);
   }
 
-  // ─── All remaining routes require auth ──────────────────────
   const auth = await requireAuth(request, env);
   if (!auth.valid) return auth.response;
 
   const { user } = auth.auth;
   const db = env.DB;
-
   let response: Response;
 
   try {
-    // ─── Dashboard (Dartboard System) ─────────────────────────
     if (path === '/api/dashboard/tabs' && method === 'GET') {
       response = await handleGetDashboardTabs(db, user.id);
     } else if (path.match(/^\/api\/dashboard\/dartboard\/[^/]+$/) && method === 'GET') {
       response = await handleGetDartboard(path, db, user.id);
     } else if (path === '/api/dashboard/unsorted' && method === 'GET') {
       response = await handleGetUnsorted(url, db, user.id);
-
-    // ─── Contacts ───────────────────────────────────────────────
     } else if (path === '/api/contacts' && method === 'GET') {
       response = await handleListContacts(url, db, user.id);
     } else if (path === '/api/contacts' && method === 'POST') {
@@ -171,39 +153,29 @@ export async function handleApiRoute(
       response = await handleArchiveContact(path, db, user.id);
     } else if (path.match(/^\/api\/contacts\/[^/]+\/restore$/) && method === 'POST') {
       response = await handleRestoreContact(path, db, user.id);
-
-    // ─── Circles ──────────────────────────────────────────────
     } else if (path === '/api/circles' && method === 'GET') {
       response = await handleListCircles(db, user.id);
     } else if (path === '/api/circles' && method === 'POST') {
       response = await handleCreateCircle(request, db, user.id);
+    } else if (path === '/api/circles/reorder' && method === 'PATCH') {
+      response = await handleReorderCircles(request, db, user.id);
     } else if (path.match(/^\/api\/circles\/[^/]+$/) && method === 'GET') {
       response = await handleGetCircle(path, db, user.id);
     } else if (path.match(/^\/api\/circles\/[^/]+$/) && method === 'PATCH') {
       response = await handleUpdateCircle(request, path, db, user.id);
     } else if (path.match(/^\/api\/circles\/[^/]+$/) && method === 'DELETE') {
       response = await handleDeleteCircle(path, db, user.id);
-
-    // ─── Interactions ─────────────────────────────────────────
     } else if (path === '/api/interactions' && method === 'POST') {
       response = await handleLogInteraction(request, db, user.id);
     } else if (path === '/api/interactions' && method === 'GET') {
       response = await handleListInteractions(url, db, user.id);
-
-    // ─── Braindump ────────────────────────────────────────────
     } else if (path === '/api/braindump/parse' && method === 'POST') {
       response = await handleBraindumpParse(request, env, user.id);
-
-    // ─── Export ───────────────────────────────────────────────
     } else if (path === '/api/export' && method === 'GET') {
       response = await handleExport(url, db, user.id);
-
-    // ─── Import (CSV upload, bulk import flow) ────────────────
     } else if (path.startsWith('/api/import/')) {
       const { handleImportRoute } = await import('./import');
       response = await handleImportRoute(request, env, user, path);
-
-    // ─── User ─────────────────────────────────────────────────
     } else if (path === '/api/user' && method === 'GET') {
       response = await handleGetUser(auth.auth);
     } else if (path === '/api/user' && method === 'PATCH') {
@@ -216,16 +188,12 @@ export async function handleApiRoute(
       response = await handleGetNotificationPreferences(db, user.id);
     } else if (path === '/api/user/notifications' && method === 'PATCH') {
       response = await handleUpdateNotificationPreferences(request, db, user.id);
-
-    // ─── Subscription ─────────────────────────────────────────
     } else if (path === '/api/subscription' && method === 'GET') {
       response = await handleGetSubscription(db, user.id);
     } else if (path === '/api/subscription/checkout' && method === 'POST') {
       response = await handleCheckout(request, env, auth.auth);
     } else if (path === '/api/subscription/portal' && method === 'POST') {
       response = await handlePortal(request, env, auth.auth);
-
-    // ─── 404 ──────────────────────────────────────────────────
     } else {
       response = errorResponse('Not found', 404);
     }
@@ -234,39 +202,23 @@ export async function handleApiRoute(
     response = errorResponse('Internal server error', 500);
   }
 
-  // Attach refreshed session cookie if needed
   if (auth.refreshedCookie) {
     response = withRefreshedSession(response, auth.refreshedCookie);
   }
-
   return response;
 }
 
 // ===========================================================================
-// Dashboard Handlers (Dartboard System)
+// Dashboard Handlers
 // ===========================================================================
 
-/**
- * Get dashboard tabs — circle tabs with contact counts + unsorted count.
- */
-async function handleGetDashboardTabs(
-  db: D1Database,
-  userId: string,
-): Promise<Response> {
+async function handleGetDashboardTabs(db: D1Database, userId: string): Promise<Response> {
   const tabs = await getDashboardTabs(db, userId);
   return jsonResponse({ data: tabs });
 }
 
-/**
- * Get dartboard data for a specific circle.
- */
-async function handleGetDartboard(
-  path: string,
-  db: D1Database,
-  userId: string,
-): Promise<Response> {
+async function handleGetDartboard(path: string, db: D1Database, userId: string): Promise<Response> {
   const circleId = path.replace('/api/dashboard/dartboard/', '');
-  
   try {
     const dartboard = await calculateDartboardData(db, userId, circleId);
     return jsonResponse({ data: dartboard });
@@ -278,14 +230,7 @@ async function handleGetDartboard(
   }
 }
 
-/**
- * Get unsorted contacts (no circle assigned).
- */
-async function handleGetUnsorted(
-  url: URL,
-  db: D1Database,
-  userId: string,
-): Promise<Response> {
+async function handleGetUnsorted(url: URL, db: D1Database, userId: string): Promise<Response> {
   const limit = Math.min(parseInt(url.searchParams.get('limit') ?? '50', 10), 100);
   const unsorted = await getUnsortedContacts(db, userId, limit);
   return jsonResponse({ data: unsorted });
@@ -295,42 +240,28 @@ async function handleGetUnsorted(
 // Contacts Handlers
 // ===========================================================================
 
-async function handleListContacts(
-  url: URL,
-  db: D1Database,
-  userId: string,
-): Promise<Response> {
+async function handleListContacts(url: URL, db: D1Database, userId: string): Promise<Response> {
   const filters: ContactListFilters = {};
   const pagination: PaginationOptions = {};
 
-  // Parse query params
   const intent = url.searchParams.get('intent');
   if (intent) filters.intent = intent as IntentType;
-
   const health = url.searchParams.get('health_status');
   if (health) filters.health_status = health as HealthStatus;
-
   const kind = url.searchParams.get('contact_kind');
   if (kind) filters.contact_kind = kind as ContactKind;
-
   const circleId = url.searchParams.get('circle_id');
   if (circleId) filters.circle_id = circleId;
-
   const search = url.searchParams.get('search');
   if (search) filters.search = search;
-
   const archived = url.searchParams.get('archived');
   if (archived === 'true') filters.archived = true;
-
   const limit = url.searchParams.get('limit');
   if (limit) pagination.limit = Math.min(parseInt(limit, 10) || 50, 100);
-
   const offset = url.searchParams.get('offset');
   if (offset) pagination.offset = parseInt(offset, 10) || 0;
-
   const orderBy = url.searchParams.get('order_by');
   if (orderBy) pagination.orderBy = orderBy as PaginationOptions['orderBy'];
-
   const orderDir = url.searchParams.get('order_dir');
   if (orderDir) pagination.orderDir = orderDir as PaginationOptions['orderDir'];
 
@@ -338,151 +269,76 @@ async function handleListContacts(
   return jsonResponse({ data: result });
 }
 
-async function handleCreateContact(
-  request: Request,
-  db: D1Database,
-  userId: string,
-): Promise<Response> {
+async function handleCreateContact(request: Request, db: D1Database, userId: string): Promise<Response> {
   const body = await request.json<CreateContactInput>();
-
   if (!body.name?.trim()) {
     return errorResponse('Contact name is required', 400);
   }
-
-  const contact = await createContact(db, userId, {
-    ...body,
-    name: body.name.trim(),
-  });
-
-  // If circles were assigned, recalculate scores for the new contact
+  const contact = await createContact(db, userId, { ...body, name: body.name.trim() });
   if (body.circle_ids && body.circle_ids.length > 0) {
     await updateContactScores(db, contact.id);
   }
-
   return jsonResponse({ data: contact }, 201);
 }
 
-async function handleGetContact(
-  path: string,
-  db: D1Database,
-  userId: string,
-): Promise<Response> {
+async function handleGetContact(path: string, db: D1Database, userId: string): Promise<Response> {
   const contactId = extractId(path, '/api/contacts/');
   const contact = await getContactWithCircles(db, userId, contactId);
-
   if (!contact) return errorResponse('Contact not found', 404);
   return jsonResponse({ data: contact });
 }
 
-/**
- * Update a contact.
- *
- * When intent or circle_ids change, scores are recalculated immediately
- * rather than waiting for the daily cron job. This ensures the dartboard
- * reflects changes in real-time.
- */
-async function handleUpdateContact(
-  request: Request,
-  path: string,
-  db: D1Database,
-  userId: string,
-): Promise<Response> {
+async function handleUpdateContact(request: Request, path: string, db: D1Database, userId: string): Promise<Response> {
   const contactId = extractId(path, '/api/contacts/');
   const body = await request.json<UpdateContactInput>();
-
   const contact = await updateContact(db, userId, contactId, body);
   if (!contact) return errorResponse('Contact not found', 404);
-
-  // Recalculate scores if intent or circle membership changed
-  // Intent change affects the cadence window used for scoring
-  // Circle change affects which circles the contact appears in
   if (body.intent !== undefined || body.circle_ids !== undefined) {
     await updateContactScores(db, contactId);
   }
-
   return jsonResponse({ data: contact });
 }
 
-async function handleDeleteContact(
-  url: URL,
-  path: string,
-  db: D1Database,
-  userId: string,
-): Promise<Response> {
+async function handleDeleteContact(url: URL, path: string, db: D1Database, userId: string): Promise<Response> {
   const contactId = extractId(path, '/api/contacts/');
   const hard = url.searchParams.get('hard') === 'true';
-
-  const success = hard
-    ? await deleteContact(db, userId, contactId)
-    : await archiveContact(db, userId, contactId);
-
+  const success = hard ? await deleteContact(db, userId, contactId) : await archiveContact(db, userId, contactId);
   if (!success) return errorResponse('Contact not found', 404);
   return jsonResponse({ data: { deleted: true } });
 }
 
-async function handleArchiveContact(
-  path: string,
-  db: D1Database,
-  userId: string,
-): Promise<Response> {
+async function handleArchiveContact(path: string, db: D1Database, userId: string): Promise<Response> {
   const contactId = path.replace('/api/contacts/', '').replace('/archive', '');
   const success = await archiveContact(db, userId, contactId);
-
   if (!success) return errorResponse('Contact not found or already archived', 404);
   return jsonResponse({ data: { archived: true } });
 }
 
-async function handleRestoreContact(
-  path: string,
-  db: D1Database,
-  userId: string,
-): Promise<Response> {
+async function handleRestoreContact(path: string, db: D1Database, userId: string): Promise<Response> {
   const contactId = path.replace('/api/contacts/', '').replace('/restore', '');
   const success = await restoreContact(db, userId, contactId);
-
   if (!success) return errorResponse('Contact not found or not archived', 404);
-
-  // Recalculate scores when restoring a contact
   await updateContactScores(db, contactId);
-
   return jsonResponse({ data: { restored: true } });
 }
 
-async function handleSearchContacts(
-  url: URL,
-  db: D1Database,
-  userId: string,
-): Promise<Response> {
+async function handleSearchContacts(url: URL, db: D1Database, userId: string): Promise<Response> {
   const query = url.searchParams.get('q') ?? '';
   const limit = Math.min(parseInt(url.searchParams.get('limit') ?? '10', 10), 50);
-
   const results = await searchContacts(db, userId, query, limit);
   return jsonResponse({ data: results });
 }
 
-async function handleHealthSummary(
-  db: D1Database,
-  userId: string,
-): Promise<Response> {
+async function handleHealthSummary(db: D1Database, userId: string): Promise<Response> {
   const [healthCounts, intentCounts, totalContacts] = await Promise.all([
     getHealthCounts(db, userId),
     getIntentCounts(db, userId),
     getContactCount(db, userId),
   ]);
-
-  return jsonResponse({
-    data: {
-      total: totalContacts,
-      byHealth: healthCounts,
-      byIntent: intentCounts,
-    },
-  });
+  return jsonResponse({ data: { total: totalContacts, byHealth: healthCounts, byIntent: intentCounts } });
 }
 
-async function handleRecalculateHealth(
-  db: D1Database,
-  userId: string,
-): Promise<Response> {
+async function handleRecalculateHealth(db: D1Database, userId: string): Promise<Response> {
   const result = await recalculateHealthStatuses(db, userId);
   return jsonResponse({ data: result });
 }
@@ -491,110 +347,83 @@ async function handleRecalculateHealth(
 // Circles Handlers
 // ===========================================================================
 
-/**
- * List circles with contact counts for the settings page.
- */
-async function handleListCircles(
-  db: D1Database,
-  userId: string,
-): Promise<Response> {
+async function handleListCircles(db: D1Database, userId: string): Promise<Response> {
   const circles = await listCirclesWithCounts(db, userId);
   return jsonResponse({ data: circles });
 }
 
-async function handleCreateCircle(
-  request: Request,
-  db: D1Database,
-  userId: string,
-): Promise<Response> {
-  const body = await request.json<{
-    name: string;
-    default_cadence_days?: number;
-  }>();
-
+async function handleCreateCircle(request: Request, db: D1Database, userId: string): Promise<Response> {
+  const body = await request.json<{ name: string; default_cadence_days?: number }>();
   if (!body.name?.trim()) {
     return errorResponse('Circle name is required', 400);
   }
-
-  const circle = await createCircle(db, userId, {
-    name: body.name.trim(),
-    default_cadence_days: body.default_cadence_days ?? null,
-  });
-
+  const circle = await createCircle(db, userId, { name: body.name.trim(), default_cadence_days: body.default_cadence_days ?? null });
   return jsonResponse({ data: circle }, 201);
 }
 
-async function handleGetCircle(
-  path: string,
-  db: D1Database,
-  userId: string,
-): Promise<Response> {
+async function handleGetCircle(path: string, db: D1Database, userId: string): Promise<Response> {
   const circleId = extractId(path, '/api/circles/');
   const circle = await getCircle(db, userId, circleId);
-
   if (!circle) return errorResponse('Circle not found', 404);
   return jsonResponse({ data: circle });
 }
 
-async function handleUpdateCircle(
-  request: Request,
-  path: string,
-  db: D1Database,
-  userId: string,
-): Promise<Response> {
+async function handleUpdateCircle(request: Request, path: string, db: D1Database, userId: string): Promise<Response> {
   const circleId = extractId(path, '/api/circles/');
-  const body = await request.json<{
-    name?: string;
-    default_cadence_days?: number | null;
-    sort_order?: number;
-  }>();
-
+  const body = await request.json<{ name?: string; default_cadence_days?: number | null; sort_order?: number }>();
   const circle = await updateCircle(db, userId, circleId, body);
   if (!circle) return errorResponse('Circle not found', 404);
-
   return jsonResponse({ data: circle });
 }
 
-async function handleDeleteCircle(
-  path: string,
-  db: D1Database,
-  userId: string,
-): Promise<Response> {
+async function handleDeleteCircle(path: string, db: D1Database, userId: string): Promise<Response> {
   const circleId = extractId(path, '/api/circles/');
   const result = await deleteCircle(db, userId, circleId);
-
   if (!result.deleted) {
     return errorResponse(result.reason || 'Circle not found', 400);
   }
   return jsonResponse({ data: { deleted: true } });
 }
 
+/**
+ * Reorder circles by providing an array of circle IDs in desired order.
+ * Also updates the user's circle_tab_order preference.
+ */
+async function handleReorderCircles(request: Request, db: D1Database, userId: string): Promise<Response> {
+  const body = await request.json<{ circleIds: string[] }>();
+
+  if (!body.circleIds || !Array.isArray(body.circleIds) || body.circleIds.length === 0) {
+    return errorResponse('circleIds array is required', 400);
+  }
+
+  const placeholders = body.circleIds.map(() => '?').join(',');
+  const { results: validCircles } = await db
+    .prepare(`SELECT id FROM circles WHERE id IN (${placeholders}) AND user_id = ?`)
+    .bind(...body.circleIds, userId)
+    .all<{ id: string }>();
+
+  const validIds = new Set(validCircles.map(c => c.id));
+  const invalidIds = body.circleIds.filter(id => !validIds.has(id));
+
+  if (invalidIds.length > 0) {
+    return errorResponse(`Invalid circle IDs: ${invalidIds.join(', ')}`, 400);
+  }
+
+  await reorderCircles(db, userId, body.circleIds);
+
+  await db
+    .prepare(`UPDATE users SET circle_tab_order = ?, updated_at = datetime('now') WHERE id = ?`)
+    .bind(JSON.stringify(body.circleIds), userId)
+    .run();
+
+  return jsonResponse({ data: { reordered: true, order: body.circleIds } });
+}
+
 // ===========================================================================
 // Interactions Handlers
 // ===========================================================================
 
-/**
- * Log a new interaction.
- *
- * Accepts optional circle_context to specify which circles this interaction
- * counts toward. This solves the "two hats" problem where your brother
- * might be in both Family and Work circles, but a call about Dad's birthday
- * should only count for Family.
- *
- * Request body:
- *   contact_id: string (required)
- *   method: InteractionMethod (required)
- *   date?: string (ISO format, defaults to now)
- *   summary?: string
- *   circle_context?: string[] (circle IDs, null = counts for all)
- *
- * @see docs/dartboard-system-design.md for the two hats problem
- */
-async function handleLogInteraction(
-  request: Request,
-  db: D1Database,
-  userId: string,
-): Promise<Response> {
+async function handleLogInteraction(request: Request, db: D1Database, userId: string): Promise<Response> {
   const body = await request.json<{
     contact_id: string;
     method: InteractionMethod;
@@ -603,16 +432,10 @@ async function handleLogInteraction(
     circle_context?: string[];
   }>();
 
-  if (!body.contact_id) {
-    return errorResponse('contact_id is required', 400);
-  }
-  if (!body.method) {
-    return errorResponse('method is required', 400);
-  }
+  if (!body.contact_id) return errorResponse('contact_id is required', 400);
+  if (!body.method) return errorResponse('method is required', 400);
 
-  // Validate circle_context if provided - ensure they're valid UUIDs
   if (body.circle_context && body.circle_context.length > 0) {
-    // Verify the circles exist and belong to the user
     const circleIds = body.circle_context;
     const placeholders = circleIds.map(() => '?').join(',');
     const { results: validCircles } = await db
@@ -637,36 +460,16 @@ async function handleLogInteraction(
     logged_via: 'dashboard',
   });
 
-  if (!interaction) {
-    return errorResponse('Contact not found', 404);
-  }
-
+  if (!interaction) return errorResponse('Contact not found', 404);
   return jsonResponse({ data: interaction }, 201);
 }
 
-/**
- * List interactions.
- *
- * If contact_id is provided, returns interaction history for that contact
- * with circle names resolved. Otherwise returns recent interactions across
- * all contacts.
- *
- * Query params:
- *   contact_id?: string - Filter to specific contact
- *   limit?: number - Max results (default 20, max 100)
- *   include_circles?: boolean - Include resolved circle names (default true for contact history)
- */
-async function handleListInteractions(
-  url: URL,
-  db: D1Database,
-  userId: string,
-): Promise<Response> {
+async function handleListInteractions(url: URL, db: D1Database, userId: string): Promise<Response> {
   const contactId = url.searchParams.get('contact_id');
   const limit = Math.min(parseInt(url.searchParams.get('limit') ?? '20', 10), 100);
   const includeCircles = url.searchParams.get('include_circles') !== 'false';
 
   if (contactId) {
-    // Contact-specific history with circle names
     if (includeCircles) {
       const result = await getInteractionHistoryWithCircles(db, userId, contactId, limit);
       return jsonResponse({ data: result.interactions, total: result.total });
@@ -676,7 +479,6 @@ async function handleListInteractions(
     }
   }
 
-  // Recent interactions across all contacts
   const interactions = await getRecentInteractions(db, userId, 7, limit);
   return jsonResponse({ data: interactions });
 }
@@ -685,38 +487,11 @@ async function handleListInteractions(
 // Braindump Handler
 // ===========================================================================
 
-/**
- * Parse free-form text about contacts into structured data.
- *
- * Uses Claude Haiku for cost-efficient AI parsing.
- * Returns contacts, interactions, and unresolved fragments.
- */
-async function handleBraindumpParse(
-  request: Request,
-  env: Env,
-  userId: string,
-): Promise<Response> {
+async function handleBraindumpParse(request: Request, env: Env, userId: string): Promise<Response> {
   const body = await request.json<{ text: string }>();
-
-  if (!body.text?.trim()) {
-    return errorResponse('Text content is required', 400);
-  }
-
-  // TODO: Check usage limits for free tier users
-  // const usage = await getUsageTracking(db, userId);
-  // if (user.subscription_tier === 'free' && usage.braindumps_processed >= FREE_TIER_LIMITS.max_braindumps_per_day) {
-  //   return errorResponse('Daily braindump limit reached. Upgrade to premium for unlimited.', 429);
-  // }
-
+  if (!body.text?.trim()) return errorResponse('Text content is required', 400);
   const result = await parseBraindump(env, body.text);
-
-  if (!result.success) {
-    return errorResponse(result.error, 400);
-  }
-
-  // TODO: Increment usage tracking
-  // await incrementUsage(db, userId, 'braindumps_processed');
-
+  if (!result.success) return errorResponse(result.error, 400);
   return jsonResponse({ data: result.data });
 }
 
@@ -724,30 +499,20 @@ async function handleBraindumpParse(
 // Export Handler
 // ===========================================================================
 
-async function handleExport(
-  url: URL,
-  db: D1Database,
-  userId: string,
-): Promise<Response> {
+async function handleExport(url: URL, db: D1Database, userId: string): Promise<Response> {
   const filters: ExportFilters = {};
-
   const intent = url.searchParams.get('intent');
   if (intent) filters.intent = intent as IntentType;
-
   const health = url.searchParams.get('health_status');
   if (health) filters.health_status = health as HealthStatus;
-
   const kind = url.searchParams.get('contact_kind');
   if (kind) filters.contact_kind = kind as ContactKind;
-
   const circleId = url.searchParams.get('circle_id');
   if (circleId) filters.circle_id = circleId;
-
   const archived = url.searchParams.get('archived');
   if (archived === 'true') filters.archived = true;
 
   const csv = await exportContacts(db, userId, filters);
-
   return new Response(csv, {
     status: 200,
     headers: {
@@ -775,7 +540,6 @@ async function handleGetUser(auth: AuthContext): Promise<Response> {
       onboardingStage: user.onboarding_stage,
       defaultCircleId: user.default_circle_id,
       circleTabOrder: user.circle_tab_order ? JSON.parse(user.circle_tab_order) : null,
-      // Notification preferences
       timezone: user.timezone,
       preferredNudgeHour: user.preferred_nudge_hour,
       nudgeFrequency: user.nudge_frequency,
@@ -786,17 +550,8 @@ async function handleGetUser(auth: AuthContext): Promise<Response> {
   });
 }
 
-async function handleUpdateUser(
-  request: Request,
-  db: D1Database,
-  userId: string,
-): Promise<Response> {
-  const body = await request.json<{
-    name?: string;
-    email?: string;
-    gender?: 'male' | 'female' | null;
-  }>();
-
+async function handleUpdateUser(request: Request, db: D1Database, userId: string): Promise<Response> {
+  const body = await request.json<{ name?: string; email?: string; gender?: 'male' | 'female' | null }>();
   const sets: string[] = [];
   const binds: unknown[] = [];
 
@@ -813,203 +568,63 @@ async function handleUpdateUser(
     sets.push('gender = ?');
     binds.push(body.gender);
   }
-
-  if (sets.length === 0) {
-    return errorResponse('No fields to update', 400);
-  }
+  if (sets.length === 0) return errorResponse('No fields to update', 400);
 
   sets.push("updated_at = datetime('now')");
   binds.push(userId);
 
-  await db
-    .prepare(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`)
-    .bind(...binds)
-    .run();
-
-  // Return updated user
-  const user = await db
-    .prepare('SELECT * FROM users WHERE id = ?')
-    .bind(userId)
-    .first();
-
+  await db.prepare(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`).bind(...binds).run();
+  const user = await db.prepare('SELECT * FROM users WHERE id = ?').bind(userId).first();
   return jsonResponse({ data: user });
 }
 
-/**
- * Delete user account and all associated data.
- *
- * This is a destructive operation that:
- *   1. Cancels any active Stripe subscriptions
- *   2. Deletes all user data in the correct order (respecting foreign keys)
- *   3. Logs the deletion for audit purposes
- *
- * Requires explicit confirmation in request body: { confirm: true }
- *
- * Deletion order:
- *   1. circle_scores (references contacts)
- *   2. contact_circles (references contacts)
- *   3. interactions (references user)
- *   4. nudges (references user)
- *   5. usage_tracking (references user)
- *   6. contacts (references user)
- *   7. circles (references user)
- *   8. verification_codes (references user phone)
- *   9. sessions (references user)
- *   10. users
- */
-async function handleDeleteUser(
-  request: Request,
-  env: Env,
-  db: D1Database,
-  auth: AuthContext,
-): Promise<Response> {
+async function handleDeleteUser(request: Request, env: Env, db: D1Database, auth: AuthContext): Promise<Response> {
   const { user } = auth;
-
-  // Parse request body for confirmation
   let body: { confirm?: boolean } = {};
-  try {
-    body = await request.json();
-  } catch {
-    // Empty body is fine, will fail confirmation check
-  }
+  try { body = await request.json(); } catch { /* empty */ }
 
   if (body.confirm !== true) {
-    return errorResponse(
-      'Account deletion requires explicit confirmation. Send { "confirm": true } in the request body.',
-      400,
-      'confirmation_required',
-    );
+    return errorResponse('Account deletion requires explicit confirmation. Send { "confirm": true } in the request body.', 400, 'confirmation_required');
   }
 
   console.log(`[api] Account deletion requested for user ${user.id} (${user.phone})`);
 
   try {
-    // Step 1: Cancel Stripe subscriptions if user has a customer ID
     let stripeCanceled = 0;
     if (user.stripe_customer_id) {
-      console.log(`[api] Canceling Stripe subscriptions for customer ${user.stripe_customer_id}`);
       const stripeResult = await cancelAllSubscriptions(env, user.stripe_customer_id);
       stripeCanceled = stripeResult.canceled;
-      if (stripeResult.errors.length > 0) {
-        console.warn('[api] Stripe cancellation errors:', stripeResult.errors);
-      }
     }
 
-    // Step 2: Delete all user data in correct order
-    // Get contact IDs first for cascade deletes
-    const { results: contacts } = await db
-      .prepare('SELECT id FROM contacts WHERE user_id = ?')
-      .bind(user.id)
-      .all<{ id: string }>();
-
+    const { results: contacts } = await db.prepare('SELECT id FROM contacts WHERE user_id = ?').bind(user.id).all<{ id: string }>();
     const contactIds = contacts.map((c) => c.id);
 
-    // Delete circle_scores for user's contacts
     if (contactIds.length > 0) {
       const placeholders = contactIds.map(() => '?').join(',');
-      await db
-        .prepare(`DELETE FROM circle_scores WHERE contact_id IN (${placeholders})`)
-        .bind(...contactIds)
-        .run();
+      await db.prepare(`DELETE FROM circle_scores WHERE contact_id IN (${placeholders})`).bind(...contactIds).run();
+      await db.prepare(`DELETE FROM contact_circles WHERE contact_id IN (${placeholders})`).bind(...contactIds).run();
     }
 
-    // Delete contact_circles for user's contacts
-    if (contactIds.length > 0) {
-      const placeholders = contactIds.map(() => '?').join(',');
-      await db
-        .prepare(`DELETE FROM contact_circles WHERE contact_id IN (${placeholders})`)
-        .bind(...contactIds)
-        .run();
-    }
+    await db.prepare('DELETE FROM interactions WHERE user_id = ?').bind(user.id).run();
+    await db.prepare('DELETE FROM nudges WHERE user_id = ?').bind(user.id).run();
+    await db.prepare('DELETE FROM usage_tracking WHERE user_id = ?').bind(user.id).run();
+    await db.prepare('DELETE FROM contacts WHERE user_id = ?').bind(user.id).run();
+    await db.prepare('DELETE FROM circles WHERE user_id = ?').bind(user.id).run();
+    await db.prepare('DELETE FROM verification_codes WHERE phone = ?').bind(user.phone).run();
+    await db.prepare('DELETE FROM sessions WHERE user_id = ?').bind(user.id).run();
+    await db.prepare('DELETE FROM users WHERE id = ?').bind(user.id).run();
 
-    // Delete interactions
-    await db
-      .prepare('DELETE FROM interactions WHERE user_id = ?')
-      .bind(user.id)
-      .run();
-
-    // Delete nudges
-    await db
-      .prepare('DELETE FROM nudges WHERE user_id = ?')
-      .bind(user.id)
-      .run();
-
-    // Delete usage_tracking
-    await db
-      .prepare('DELETE FROM usage_tracking WHERE user_id = ?')
-      .bind(user.id)
-      .run();
-
-    // Delete contacts
-    await db
-      .prepare('DELETE FROM contacts WHERE user_id = ?')
-      .bind(user.id)
-      .run();
-
-    // Delete circles
-    await db
-      .prepare('DELETE FROM circles WHERE user_id = ?')
-      .bind(user.id)
-      .run();
-
-    // Delete verification codes by phone
-    await db
-      .prepare('DELETE FROM verification_codes WHERE phone = ?')
-      .bind(user.phone)
-      .run();
-
-    // Delete sessions
-    await db
-      .prepare('DELETE FROM sessions WHERE user_id = ?')
-      .bind(user.id)
-      .run();
-
-    // Finally, delete the user
-    await db
-      .prepare('DELETE FROM users WHERE id = ?')
-      .bind(user.id)
-      .run();
-
-    console.log(`[api] Account deletion completed for user ${user.id}`);
-
-    // Clear the session cookie
-    const response = jsonResponse({
-      data: {
-        deleted: true,
-        message: 'Account and all data permanently deleted',
-        stripeSubscriptionsCanceled: stripeCanceled,
-      },
-    });
-
-    // Add cookie clear header
-    response.headers.set(
-      'Set-Cookie',
-      'session=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0',
-    );
-
+    const response = jsonResponse({ data: { deleted: true, message: 'Account and all data permanently deleted', stripeSubscriptionsCanceled: stripeCanceled } });
+    response.headers.set('Set-Cookie', 'session=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0');
     return response;
   } catch (err) {
     console.error('[api] Account deletion failed:', err);
-    return errorResponse(
-      `Failed to delete account: ${err instanceof Error ? err.message : 'Unknown error'}`,
-      500,
-    );
+    return errorResponse(`Failed to delete account: ${err instanceof Error ? err.message : 'Unknown error'}`, 500);
   }
 }
 
-/**
- * Update user dashboard preferences (default tab, tab order).
- */
-async function handleUpdateUserPreferences(
-  request: Request,
-  db: D1Database,
-  userId: string,
-): Promise<Response> {
-  const body = await request.json<{
-    defaultCircleId?: string | null;
-    circleTabOrder?: string[];
-  }>();
-
+async function handleUpdateUserPreferences(request: Request, db: D1Database, userId: string): Promise<Response> {
+  const body = await request.json<{ defaultCircleId?: string | null; circleTabOrder?: string[] }>();
   const sets: string[] = [];
   const binds: unknown[] = [];
 
@@ -1021,19 +636,12 @@ async function handleUpdateUserPreferences(
     sets.push('circle_tab_order = ?');
     binds.push(JSON.stringify(body.circleTabOrder));
   }
-
-  if (sets.length === 0) {
-    return errorResponse('No preferences to update', 400);
-  }
+  if (sets.length === 0) return errorResponse('No preferences to update', 400);
 
   sets.push("updated_at = datetime('now')");
   binds.push(userId);
 
-  await db
-    .prepare(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`)
-    .bind(...binds)
-    .run();
-
+  await db.prepare(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`).bind(...binds).run();
   return jsonResponse({ data: { updated: true } });
 }
 
@@ -1041,73 +649,28 @@ async function handleUpdateUserPreferences(
 // Notification Preferences Handlers
 // ===========================================================================
 
-/**
- * Get notification preferences for the current user.
- */
-async function handleGetNotificationPreferences(
-  db: D1Database,
-  userId: string,
-): Promise<Response> {
-  const user = await db
-    .prepare(
-      `SELECT timezone, preferred_nudge_hour, nudge_frequency, 
-              quiet_hours_start, quiet_hours_end
-       FROM users WHERE id = ?`
-    )
-    .bind(userId)
-    .first<{
-      timezone: string;
-      preferred_nudge_hour: number;
-      nudge_frequency: NudgeFrequency;
-      quiet_hours_start: string | null;
-      quiet_hours_end: string | null;
-    }>();
-
-  if (!user) {
-    return errorResponse('User not found', 404);
-  }
-
-  return jsonResponse({
-    data: {
-      timezone: user.timezone,
-      preferredNudgeHour: user.preferred_nudge_hour,
-      nudgeFrequency: user.nudge_frequency,
-      quietHoursStart: user.quiet_hours_start,
-      quietHoursEnd: user.quiet_hours_end,
-    },
-  });
+async function handleGetNotificationPreferences(db: D1Database, userId: string): Promise<Response> {
+  const user = await db.prepare(`SELECT timezone, preferred_nudge_hour, nudge_frequency, quiet_hours_start, quiet_hours_end FROM users WHERE id = ?`).bind(userId).first<{
+    timezone: string;
+    preferred_nudge_hour: number;
+    nudge_frequency: NudgeFrequency;
+    quiet_hours_start: string | null;
+    quiet_hours_end: string | null;
+  }>();
+  if (!user) return errorResponse('User not found', 404);
+  return jsonResponse({ data: { timezone: user.timezone, preferredNudgeHour: user.preferred_nudge_hour, nudgeFrequency: user.nudge_frequency, quietHoursStart: user.quiet_hours_start, quietHoursEnd: user.quiet_hours_end } });
 }
 
-/**
- * Update notification preferences for the current user.
- *
- * Validates:
- *   - timezone is a valid IANA timezone
- *   - preferred_nudge_hour is 0-23
- *   - nudge_frequency is 'daily', 'weekly', or 'as_needed'
- *   - quiet_hours_start/end are both set or both null
- *   - quiet hours are in HH:MM format
- */
-async function handleUpdateNotificationPreferences(
-  request: Request,
-  db: D1Database,
-  userId: string,
-): Promise<Response> {
+async function handleUpdateNotificationPreferences(request: Request, db: D1Database, userId: string): Promise<Response> {
   const body = await request.json<UpdateNotificationPreferencesInput>();
-
   const sets: string[] = [];
   const binds: unknown[] = [];
 
-  // Validate and add timezone
   if (body.timezone !== undefined) {
-    if (!isValidTimezone(body.timezone)) {
-      return errorResponse('Invalid timezone. Use IANA format (e.g., "America/New_York")', 400);
-    }
+    if (!isValidTimezone(body.timezone)) return errorResponse('Invalid timezone. Use IANA format (e.g., "America/New_York")', 400);
     sets.push('timezone = ?');
     binds.push(body.timezone);
   }
-
-  // Validate and add preferred_nudge_hour
   if (body.preferred_nudge_hour !== undefined) {
     if (!Number.isInteger(body.preferred_nudge_hour) || body.preferred_nudge_hour < 0 || body.preferred_nudge_hour > 23) {
       return errorResponse('preferred_nudge_hour must be an integer from 0-23', 400);
@@ -1115,213 +678,86 @@ async function handleUpdateNotificationPreferences(
     sets.push('preferred_nudge_hour = ?');
     binds.push(body.preferred_nudge_hour);
   }
-
-  // Validate and add nudge_frequency
   if (body.nudge_frequency !== undefined) {
     const validFrequencies: NudgeFrequency[] = ['daily', 'weekly', 'as_needed'];
-    if (!validFrequencies.includes(body.nudge_frequency)) {
-      return errorResponse('nudge_frequency must be "daily", "weekly", or "as_needed"', 400);
-    }
+    if (!validFrequencies.includes(body.nudge_frequency)) return errorResponse('nudge_frequency must be "daily", "weekly", or "as_needed"', 400);
     sets.push('nudge_frequency = ?');
     binds.push(body.nudge_frequency);
   }
 
-  // Validate quiet hours — both must be set or both null
   const hasStart = body.quiet_hours_start !== undefined;
   const hasEnd = body.quiet_hours_end !== undefined;
 
   if (hasStart || hasEnd) {
-    // If either is being set, validate both
     const quietStart = hasStart ? body.quiet_hours_start : null;
     const quietEnd = hasEnd ? body.quiet_hours_end : null;
 
-    // Both must be null or both must be valid times
     if ((quietStart === null) !== (quietEnd === null)) {
-      // One is null, one isn't — check if we need to fetch the other
-      const current = await db
-        .prepare('SELECT quiet_hours_start, quiet_hours_end FROM users WHERE id = ?')
-        .bind(userId)
-        .first<{ quiet_hours_start: string | null; quiet_hours_end: string | null }>();
-
+      const current = await db.prepare('SELECT quiet_hours_start, quiet_hours_end FROM users WHERE id = ?').bind(userId).first<{ quiet_hours_start: string | null; quiet_hours_end: string | null }>();
       const effectiveStart = hasStart ? quietStart : current?.quiet_hours_start ?? null;
       const effectiveEnd = hasEnd ? quietEnd : current?.quiet_hours_end ?? null;
-
       if ((effectiveStart === null) !== (effectiveEnd === null)) {
         return errorResponse('quiet_hours_start and quiet_hours_end must both be set or both be null', 400);
       }
     }
 
-    // Validate time format if not null
-    if (quietStart !== null && !isValidTimeFormat(quietStart)) {
-      return errorResponse('quiet_hours_start must be in HH:MM format (e.g., "22:00")', 400);
-    }
-    if (quietEnd !== null && !isValidTimeFormat(quietEnd)) {
-      return errorResponse('quiet_hours_end must be in HH:MM format (e.g., "08:00")', 400);
-    }
+    if (quietStart !== null && !isValidTimeFormat(quietStart)) return errorResponse('quiet_hours_start must be in HH:MM format (e.g., "22:00")', 400);
+    if (quietEnd !== null && !isValidTimeFormat(quietEnd)) return errorResponse('quiet_hours_end must be in HH:MM format (e.g., "08:00")', 400);
 
-    if (hasStart) {
-      sets.push('quiet_hours_start = ?');
-      binds.push(quietStart);
-    }
-    if (hasEnd) {
-      sets.push('quiet_hours_end = ?');
-      binds.push(quietEnd);
-    }
+    if (hasStart) { sets.push('quiet_hours_start = ?'); binds.push(quietStart); }
+    if (hasEnd) { sets.push('quiet_hours_end = ?'); binds.push(quietEnd); }
   }
 
-  if (sets.length === 0) {
-    return errorResponse('No preferences to update', 400);
-  }
-
+  if (sets.length === 0) return errorResponse('No preferences to update', 400);
   sets.push("updated_at = datetime('now')");
   binds.push(userId);
 
-  await db
-    .prepare(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`)
-    .bind(...binds)
-    .run();
-
-  // Return updated preferences
+  await db.prepare(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`).bind(...binds).run();
   return handleGetNotificationPreferences(db, userId);
 }
 
-/**
- * Validate that a string is a valid IANA timezone.
- */
 function isValidTimezone(tz: string): boolean {
-  try {
-    // Try to create a DateTimeFormat with the timezone
-    new Intl.DateTimeFormat('en-US', { timeZone: tz });
-    return true;
-  } catch {
-    return false;
-  }
+  try { new Intl.DateTimeFormat('en-US', { timeZone: tz }); return true; } catch { return false; }
 }
 
-/**
- * Validate that a string is in HH:MM format.
- */
 function isValidTimeFormat(time: string): boolean {
-  const match = time.match(/^([01]?[0-9]|2[0-3]):([0-5][0-9])$/);
-  return match !== null;
+  return /^([01]?[0-9]|2[0-3]):([0-5][0-9])$/.test(time);
 }
 
 // ===========================================================================
 // Subscription Handlers
 // ===========================================================================
 
-async function handleGetSubscription(
-  db: D1Database,
-  userId: string,
-): Promise<Response> {
-  const user = await db
-    .prepare(
-      'SELECT subscription_tier, trial_ends_at, stripe_customer_id FROM users WHERE id = ?',
-    )
-    .bind(userId)
-    .first<{
-      subscription_tier: string;
-      trial_ends_at: string | null;
-      stripe_customer_id: string | null;
-    }>();
-
+async function handleGetSubscription(db: D1Database, userId: string): Promise<Response> {
+  const user = await db.prepare('SELECT subscription_tier, trial_ends_at, stripe_customer_id FROM users WHERE id = ?').bind(userId).first<{ subscription_tier: string; trial_ends_at: string | null; stripe_customer_id: string | null }>();
   if (!user) return errorResponse('User not found', 404);
-
-  const isTrialActive =
-    user.subscription_tier === 'trial' &&
-    user.trial_ends_at !== null &&
-    new Date(user.trial_ends_at) > new Date();
-
-  return jsonResponse({
-    data: {
-      tier: user.subscription_tier,
-      isTrialActive,
-      trialEndsAt: user.trial_ends_at,
-      isPremium: user.subscription_tier === 'premium',
-      hasStripe: !!user.stripe_customer_id,
-    },
-  });
+  const isTrialActive = user.subscription_tier === 'trial' && user.trial_ends_at !== null && new Date(user.trial_ends_at) > new Date();
+  return jsonResponse({ data: { tier: user.subscription_tier, isTrialActive, trialEndsAt: user.trial_ends_at, isPremium: user.subscription_tier === 'premium', hasStripe: !!user.stripe_customer_id } });
 }
 
-/**
- * Create a Stripe Checkout session for upgrading to premium.
- * Returns the checkout URL for client-side redirect.
- */
-async function handleCheckout(
-  request: Request,
-  env: Env,
-  auth: AuthContext,
-): Promise<Response> {
+async function handleCheckout(request: Request, env: Env, auth: AuthContext): Promise<Response> {
   const { user } = auth;
-
-  // Already premium — no need to checkout
-  if (user.subscription_tier === 'premium') {
-    return errorResponse('Already subscribed to premium', 400, 'already_subscribed');
-  }
-
-  // Build redirect URLs
+  if (user.subscription_tier === 'premium') return errorResponse('Already subscribed to premium', 400, 'already_subscribed');
   const dashboardUrl = env.DASHBOARD_URL || 'https://app.bethany.network';
-  const successUrl = `${dashboardUrl}/settings?upgrade=success`;
-  const cancelUrl = `${dashboardUrl}/settings?upgrade=cancelled`;
-
   try {
-    const result = await createCheckoutSession(
-      env,
-      user.id,
-      user.email,
-      user.phone,
-      successUrl,
-      cancelUrl,
-      user.stripe_customer_id,
-    );
-
-    return jsonResponse({
-      data: {
-        checkoutUrl: result.url,
-        sessionId: result.sessionId,
-      },
-    });
+    const result = await createCheckoutSession(env, user.id, user.email, user.phone, `${dashboardUrl}/settings?upgrade=success`, `${dashboardUrl}/settings?upgrade=cancelled`, user.stripe_customer_id);
+    return jsonResponse({ data: { checkoutUrl: result.url, sessionId: result.sessionId } });
   } catch (err) {
     console.error('[api] Checkout session creation failed:', err);
-    return errorResponse(
-      err instanceof Error ? err.message : 'Failed to create checkout session',
-      500,
-    );
+    return errorResponse(err instanceof Error ? err.message : 'Failed to create checkout session', 500);
   }
 }
 
-/**
- * Create a Stripe Customer Portal session for managing subscription.
- * Only available for users with a Stripe customer ID.
- */
-async function handlePortal(
-  request: Request,
-  env: Env,
-  auth: AuthContext,
-): Promise<Response> {
+async function handlePortal(request: Request, env: Env, auth: AuthContext): Promise<Response> {
   const { user } = auth;
-
-  if (!user.stripe_customer_id) {
-    return errorResponse('No active subscription to manage', 400, 'no_subscription');
-  }
-
+  if (!user.stripe_customer_id) return errorResponse('No active subscription to manage', 400, 'no_subscription');
   const dashboardUrl = env.DASHBOARD_URL || 'https://app.bethany.network';
-  const returnUrl = `${dashboardUrl}/settings`;
-
   try {
-    const result = await createPortalSession(env, user.stripe_customer_id, returnUrl);
-
-    return jsonResponse({
-      data: {
-        portalUrl: result.url,
-      },
-    });
+    const result = await createPortalSession(env, user.stripe_customer_id, `${dashboardUrl}/settings`);
+    return jsonResponse({ data: { portalUrl: result.url } });
   } catch (err) {
     console.error('[api] Portal session creation failed:', err);
-    return errorResponse(
-      err instanceof Error ? err.message : 'Failed to create portal session',
-      500,
-    );
+    return errorResponse(err instanceof Error ? err.message : 'Failed to create portal session', 500);
   }
 }
 
@@ -1329,40 +765,16 @@ async function handlePortal(
 // Stripe Webhook Handler
 // ===========================================================================
 
-/**
- * Handle Stripe webhook events.
- * This endpoint is unauthenticated but verified via Stripe signature.
- */
-async function handleStripeWebhook(
-  request: Request,
-  env: Env,
-): Promise<Response> {
+async function handleStripeWebhook(request: Request, env: Env): Promise<Response> {
   const signature = request.headers.get('Stripe-Signature');
-  if (!signature) {
-    return errorResponse('Missing Stripe-Signature header', 400);
-  }
-
+  if (!signature) return errorResponse('Missing Stripe-Signature header', 400);
   const payload = await request.text();
-
   try {
     const result = await handleWebhook(env, env.DB, payload, signature);
-
-    if (!result.success) {
-      console.error(`[stripe] Webhook processing failed: ${result.message}`);
-      // Return 200 anyway to acknowledge receipt (Stripe will retry on 4xx/5xx)
-      // Only return error for signature failures
-      if (result.message === 'Invalid webhook signature') {
-        return errorResponse('Invalid signature', 401);
-      }
+    if (!result.success && result.message === 'Invalid webhook signature') {
+      return errorResponse('Invalid signature', 401);
     }
-
-    return jsonResponse({
-      data: {
-        received: true,
-        eventType: result.eventType,
-        message: result.message,
-      },
-    });
+    return jsonResponse({ data: { received: true, eventType: result.eventType, message: result.message } });
   } catch (err) {
     console.error('[stripe] Webhook error:', err);
     return errorResponse('Webhook processing failed', 500);
@@ -1373,10 +785,6 @@ async function handleStripeWebhook(
 // Helpers
 // ===========================================================================
 
-/**
- * Extract a resource ID from a path.
- * e.g., extractId('/api/contacts/abc-123', '/api/contacts/') → 'abc-123'
- */
 function extractId(path: string, prefix: string): string {
   return path.slice(prefix.length).split('/')[0];
 }
