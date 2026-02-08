@@ -5,6 +5,7 @@
  *   - Checkout session creation for upgrades
  *   - Webhook processing for payment events
  *   - Customer portal access for subscription management
+ *   - Subscription cancellation for account deletion
  *
  * Stripe event flow:
  *
@@ -75,6 +76,14 @@ export interface WebhookResult {
   success: boolean;
   eventType: string;
   message: string;
+}
+
+/**
+ * Result of canceling subscriptions
+ */
+export interface CancelSubscriptionsResult {
+  canceled: number;
+  errors: string[];
 }
 
 // ===========================================================================
@@ -212,6 +221,83 @@ export async function createPortalSession(
   const session = await response.json() as { url: string };
 
   return { url: session.url };
+}
+
+// ===========================================================================
+// Subscription Management
+// ===========================================================================
+
+/**
+ * Cancel all active subscriptions for a customer.
+ *
+ * Used during account deletion to ensure no further charges.
+ * Cancels immediately (not at period end) since the account is being deleted.
+ *
+ * @param env              - Worker environment with Stripe secrets
+ * @param stripeCustomerId - The customer's Stripe ID
+ * @returns Count of canceled subscriptions and any errors
+ */
+export async function cancelAllSubscriptions(
+  env: Env,
+  stripeCustomerId: string,
+): Promise<CancelSubscriptionsResult> {
+  const result: CancelSubscriptionsResult = { canceled: 0, errors: [] };
+
+  try {
+    // List all subscriptions for the customer (active, trialing, past_due)
+    const params = new URLSearchParams();
+    params.append('customer', stripeCustomerId);
+    params.append('limit', '100');
+
+    const response = await fetch(`${STRIPE_API_BASE}/subscriptions?${params}`, {
+      headers: {
+        'Authorization': `Bearer ${env.STRIPE_SECRET_KEY}`,
+      },
+    });
+
+    if (!response.ok) {
+      const error = await response.json() as { error?: { message?: string } };
+      result.errors.push(error.error?.message || 'Failed to list subscriptions');
+      return result;
+    }
+
+    const subscriptions = await response.json() as {
+      data: Array<{ id: string; status: string }>;
+    };
+
+    // Cancel each subscription
+    for (const sub of subscriptions.data) {
+      // Only cancel active/trialing/past_due subscriptions
+      if (['active', 'trialing', 'past_due'].includes(sub.status)) {
+        try {
+          const cancelResponse = await fetch(
+            `${STRIPE_API_BASE}/subscriptions/${sub.id}`,
+            {
+              method: 'DELETE',
+              headers: {
+                'Authorization': `Bearer ${env.STRIPE_SECRET_KEY}`,
+              },
+            },
+          );
+
+          if (cancelResponse.ok) {
+            result.canceled++;
+            console.log(`[stripe] Canceled subscription ${sub.id}`);
+          } else {
+            const error = await cancelResponse.json() as { error?: { message?: string } };
+            result.errors.push(`Failed to cancel ${sub.id}: ${error.error?.message}`);
+          }
+        } catch (err) {
+          result.errors.push(`Error canceling ${sub.id}: ${err instanceof Error ? err.message : 'Unknown'}`);
+        }
+      }
+    }
+
+    return result;
+  } catch (err) {
+    result.errors.push(`Failed to process subscriptions: ${err instanceof Error ? err.message : 'Unknown'}`);
+    return result;
+  }
 }
 
 // ===========================================================================
