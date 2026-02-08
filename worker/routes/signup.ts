@@ -17,7 +17,7 @@
  * GET /signup:
  *   Redirects to the landing page at bethany.untitledpublishers.com/signup
  *
- * GET /signup/complete?token=xxx:
+ * GET /auth/callback?token=xxx:
  *   Exchanges the one-time token for a session cookie and redirects to welcome page
  *
  * @see worker/services/onboarding-service.ts for initializeOnboarding()
@@ -28,7 +28,7 @@
 
 import type { Env } from '../../shared/types';
 import type { UserRow, OnboardingStage } from '../../shared/models';
-import { jsonResponse, errorResponse, corsHeaders } from '../../shared/http';
+import { jsonResponse, errorResponse, getCorsHeaders } from '../../shared/http';
 import { getUserByPhone } from '../services/user-service';
 import { initializeDefaultCircles } from '../services/circle-service';
 import { initializeTrial } from '../services/subscription-service';
@@ -241,18 +241,20 @@ export async function handleSignupPost(
   env: Env,
   ctx: ExecutionContext,
 ): Promise<Response> {
+  const origin = request.headers.get('Origin');
+  
   // Parse body
   let input: Partial<SignupFormInput>;
   try {
     input = await request.json<Partial<SignupFormInput>>();
   } catch {
-    return jsonResponse({ success: false, error: 'Invalid request body.' } as SignupError, 400);
+    return errorResponse('Invalid request body.', 400, undefined, origin);
   }
 
   // Validate
   const validationError = validateInput(input);
   if (validationError) {
-    return jsonResponse(validationError, 400);
+    return jsonResponse(validationError, 400, origin);
   }
 
   const name = input.name!.trim();
@@ -270,6 +272,7 @@ export async function handleSignupPost(
         field: 'phone',
       } as SignupError,
       409,
+      origin,
     );
   }
 
@@ -286,6 +289,7 @@ export async function handleSignupPost(
         field: 'email',
       } as SignupError,
       409,
+      origin,
     );
   }
 
@@ -313,6 +317,7 @@ export async function handleSignupPost(
     return jsonResponse(
       { success: false, error: 'Account creation failed. Please try again.' } as SignupError,
       500,
+      origin,
     );
   }
 
@@ -382,11 +387,12 @@ export async function handleSignupPost(
       redirectUrl,
     } as SignupSuccess,
     201,
+    origin,
   );
 }
 
 // ---------------------------------------------------------------------------
-// GET /signup/complete Handler (Token Exchange)
+// GET /auth/callback Handler (Token Exchange)
 // ---------------------------------------------------------------------------
 
 /**
