@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import { useApi } from '../hooks/useApi';
 import { Dartboard } from '../components/Dartboard';
 import { UnsortedTab } from '../components/UnsortedTab';
+import { CircleSummary, CircleSummaryBadge } from '../components/CircleSummary';
 import { Inbox, Plus, Settings, ChevronRight } from 'lucide-react';
 
 // ===========================================================================
@@ -14,6 +15,13 @@ interface DashboardTab {
   id: string;
   name: string;
   contactCount: number;
+  // Summary data for tooltip (optional, may need backend update)
+  summary?: {
+    thriving: number;
+    healthy: number;
+    slipping: number;
+    drifting: number;
+  };
 }
 
 interface DashboardTabsResponse {
@@ -163,6 +171,7 @@ export function OverviewPage() {
               onClick={() => setActiveTab(tab.id)}
               className={`
                 px-4 py-2 text-sm font-medium whitespace-nowrap border-b-2 transition-colors
+                flex items-center gap-2
                 ${activeTab === tab.id
                   ? 'border-bethany-500 text-bethany-500'
                   : 'border-transparent text-charcoal-light hover:text-charcoal hover:border-charcoal-300'
@@ -170,11 +179,19 @@ export function OverviewPage() {
               `}
             >
               {tab.name}
-              {tab.contactCount > 0 && (
-                <span className="ml-2 text-xs text-charcoal-light">
+              {/* Show summary badge if available, otherwise just count */}
+              {tab.summary ? (
+                <CircleSummaryBadge
+                  circleName={tab.name}
+                  {...tab.summary}
+                  showTooltip
+                  className="ml-1"
+                />
+              ) : tab.contactCount > 0 ? (
+                <span className="text-xs text-charcoal-light">
                   {tab.contactCount}
                 </span>
-              )}
+              ) : null}
             </button>
           ))}
 
@@ -250,29 +267,12 @@ function DartboardView({ data }: { data: DartboardResponse }) {
 
   return (
     <div className="space-y-6">
-      {/* Summary stats */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        <StatCard
-          label="Thriving"
-          value={data.summary.thriving}
-          color="sage"
-        />
-        <StatCard
-          label="Healthy"
-          value={data.summary.healthy}
-          color="bethany"
-        />
-        <StatCard
-          label="Slipping"
-          value={data.summary.slipping}
-          color="golden"
-        />
-        <StatCard
-          label="Drifting"
-          value={data.summary.drifting}
-          color="red"
-        />
-      </div>
+      {/* Summary stats - using CircleSummary detailed variant */}
+      <CircleSummary
+        {...data.summary}
+        variant="detailed"
+        showLabels
+      />
 
       {/* Dartboards */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -293,30 +293,6 @@ function DartboardView({ data }: { data: DartboardResponse }) {
 // ===========================================================================
 // Helper Components
 // ===========================================================================
-
-function StatCard({
-  label,
-  value,
-  color,
-}: {
-  label: string;
-  value: number;
-  color: 'sage' | 'bethany' | 'golden' | 'red';
-}) {
-  const colors = {
-    sage: 'bg-sage-50 text-sage-600',
-    bethany: 'bg-bethany-50 text-bethany-600',
-    golden: 'bg-golden-50 text-golden-500',
-    red: 'bg-red-50 text-red-600',
-  };
-
-  return (
-    <div className={`rounded-xl p-4 ${colors[color]}`}>
-      <p className="text-2xl font-semibold">{value}</p>
-      <p className="text-sm opacity-80">{label}</p>
-    </div>
-  );
-}
 
 function LoadingState() {
   return (
