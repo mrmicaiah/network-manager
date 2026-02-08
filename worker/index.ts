@@ -18,7 +18,7 @@
 import { Env } from '../shared/types';
 import { corsHeaders, jsonResponse, errorResponse } from '../shared/http';
 import { handleSmsWebhook } from './routes/sms';
-import { handleSignupPost, handleSignupPage } from './routes/signup';
+import { handleSignupPost, handleSignupPage, handleSignupComplete } from './routes/signup';
 import { handleApiRoute } from './routes/api';
 import { handleScheduled } from './cron/scheduled';
 
@@ -30,8 +30,8 @@ export { NudgeContextDO } from './services/nudge-conversation-flow';
 export { IntentContextDO as IntentSortingDO } from './services/intent-assignment-flow';
 
 const VERSION = {
-  version: '0.11.1',
-  updated: '2026-02-06',
+  version: '0.12.0',
+  updated: '2026-02-08',
   codename: 'network-manager',
 };
 
@@ -74,6 +74,11 @@ export default {
           return handleSignupPost(request, env, ctx);
         }
         return errorResponse('Method not allowed', 405);
+      }
+
+      // Token exchange for post-signup redirect
+      if (url.pathname === '/auth/callback' && request.method === 'GET') {
+        return handleSignupComplete(request, env);
       }
 
       // ===========================================
