@@ -8,6 +8,9 @@ type Step = 'phone' | 'code';
 /** Resend cooldown in seconds */
 const RESEND_COOLDOWN = 60;
 
+/** Marketing site signup URL */
+const SIGNUP_URL = 'https://network-manager-site.pages.dev/signup';
+
 export function LoginPage() {
   const { requestCode, login, isAuthenticated } = useAuth();
   const navigate = useNavigate();
@@ -254,7 +257,7 @@ export function LoginPage() {
 
         <p className="text-center text-sm text-charcoal-light mt-6">
           Don't have an account?{' '}
-          <a href="/signup" className="text-bethany-500 hover:text-bethany-600 font-medium transition-colors">
+          <a href={SIGNUP_URL} className="text-bethany-500 hover:text-bethany-600 font-medium transition-colors">
             Sign up
           </a>
         </p>
