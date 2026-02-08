@@ -78,6 +78,15 @@ export type ContactKind = 'kin' | 'non_kin';
 export type UserGender = 'male' | 'female' | null;
 
 /**
+ * Nudge frequency preference — how often the user wants proactive nudges.
+ *
+ * - 'daily': Daily nudges for contacts needing attention (premium default)
+ * - 'weekly': Weekly digest only, sent Monday mornings (free default)
+ * - 'as_needed': Only nudge when relationships are red/critical
+ */
+export type NudgeFrequency = 'daily' | 'weekly' | 'as_needed';
+
+/**
  * Drift severity — how far a contact's actual interaction frequency
  * has diverged from their assigned Dunbar layer.
  *
@@ -299,6 +308,39 @@ export interface UserRow {
    * @see docs/dartboard-system-design.md
    */
   circle_tab_order: string | null;
+  /**
+   * User's timezone in IANA format (e.g., 'America/New_York').
+   * Used for scheduling nudges at appropriate local times.
+   *
+   * @see worker/cron/scheduled.ts for timezone-aware delivery
+   */
+  timezone: string;
+  /**
+   * Preferred hour for nudge delivery (0-23 in user's local timezone).
+   * Default: 8 (8am)
+   */
+  preferred_nudge_hour: number;
+  /**
+   * How often the user wants proactive nudges.
+   * - 'daily': Daily nudges (premium default)
+   * - 'weekly': Weekly digest only (free default)
+   * - 'as_needed': Only when relationships are red/critical
+   *
+   * @see NudgeFrequency type
+   */
+  nudge_frequency: NudgeFrequency;
+  /**
+   * Start of quiet hours window (HH:MM format, e.g., '22:00').
+   * No SMS will be sent during quiet hours.
+   * Both quiet_hours_start and quiet_hours_end must be set, or both null.
+   */
+  quiet_hours_start: string | null;
+  /**
+   * End of quiet hours window (HH:MM format, e.g., '08:00').
+   * No SMS will be sent during quiet hours.
+   * Both quiet_hours_start and quiet_hours_end must be set, or both null.
+   */
+  quiet_hours_end: string | null;
   created_at: string;            // ISO timestamp
   updated_at: string;            // ISO timestamp
 }
@@ -599,6 +641,17 @@ export interface LogInteractionInput {
   summary?: string;
   logged_via?: string;       // Defaults to 'dashboard'
   circle_context?: string[]; // Which circles this counts for (null = all)
+}
+
+/**
+ * Input for updating user notification preferences.
+ */
+export interface UpdateNotificationPreferencesInput {
+  timezone?: string;
+  preferred_nudge_hour?: number;
+  nudge_frequency?: NudgeFrequency;
+  quiet_hours_start?: string | null;
+  quiet_hours_end?: string | null;
 }
 
 /**
