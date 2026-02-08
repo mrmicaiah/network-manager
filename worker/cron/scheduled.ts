@@ -12,6 +12,7 @@
  *
  *   0 * * * *    → Hourly: timezone-aware nudge generation, delivery, sorting
  *   0 0 * * *    → Midnight UTC: trial expiration, usage cleanup
+ *   0 1 * * *    → 1 AM UTC: daily score recalculation (point decay)
  *   0 6 * * 1    → Monday 6am UTC: weekly health recalculation
  *
  * Error handling:
@@ -24,6 +25,7 @@
  * @see worker/services/subscription-service.ts for processExpiredTrials()
  * @see worker/services/contact-service.ts for recalculateAllHealthStatuses()
  * @see worker/services/nudge-service.ts for nudge generation and delivery
+ * @see worker/services/score-service.ts for recalculateAllScores()
  */
 
 import type { Env } from '../../shared/types';
@@ -37,6 +39,7 @@ import {
 } from '../services/nudge-service';
 import { generateSortingCheckins } from '../services/sorting-checkin-service';
 import { processTrialReminders, sendTrialExpiredNotification } from '../services/trial-messaging-service';
+import { recalculateAllScores } from '../services/score-service';
 
 // ===========================================================================
 // Types
@@ -63,6 +66,22 @@ interface UserWithTimezone {
   preferred_nudge_hour: number;
   subscription_tier: string;
 }
+
+// ===========================================================================
+// Constants
+// ===========================================================================
+
+/**
+ * Batch size for processing users in bulk operations.
+ * Keeps memory usage bounded and allows progress logging.
+ */
+const USER_BATCH_SIZE = 100;
+
+/**
+ * Timeout for individual user processing (in ms).
+ * Prevents one slow user from blocking the entire job.
+ */
+const USER_PROCESS_TIMEOUT = 10000; // 10 seconds
 
 // ===========================================================================
 // Timezone Helpers
@@ -137,6 +156,11 @@ export async function handleScheduled(
   if (trigger === '0 0 * * *') {
     results.push(await runJob('trialExpirationCheck', () => trialExpirationCheck(env)));
     results.push(await runJob('usageDataCleanup', () => usageDataCleanup(env)));
+  }
+
+  // ─── 1 AM UTC daily — Score recalculation (point decay) ───
+  if (trigger === '0 1 * * *') {
+    results.push(await runJob('scoreRecalculation', () => scoreRecalculation(env)));
   }
 
   // ─── Monday 6am UTC — Weekly health recalculation ───
@@ -421,6 +445,77 @@ async function usageDataCleanup(env: Env): Promise<Record<string, unknown>> {
 }
 
 /**
+ * Recalculate scores for all users.
+ *
+ * Runs at 1 AM UTC daily (off-peak). Handles point decay by
+ * recalculating scores as the cadence window rolls forward.
+ *
+ * Processes users in batches to:
+ *   1. Keep memory usage bounded
+ *   2. Allow progress logging
+ *   3. Prevent one slow user from blocking others
+ */
+async function scoreRecalculation(env: Env): Promise<Record<string, unknown>> {
+  const db = env.DB;
+
+  // Get total user count for progress tracking
+  const countResult = await db
+    .prepare(`SELECT COUNT(*) as count FROM users`)
+    .first<{ count: number }>();
+  const totalUsers = countResult?.count ?? 0;
+
+  let offset = 0;
+  let usersProcessed = 0;
+  let scoresUpdated = 0;
+  let errors = 0;
+  let batchNumber = 0;
+
+  // Process users in batches
+  while (offset < totalUsers) {
+    batchNumber++;
+
+    // Get batch of user IDs
+    const { results: users } = await db
+      .prepare(`SELECT id FROM users ORDER BY id LIMIT ? OFFSET ?`)
+      .bind(USER_BATCH_SIZE, offset)
+      .all<{ id: string }>();
+
+    if (users.length === 0) break;
+
+    console.log(
+      `[cron:scoreRecalc] Processing batch ${batchNumber} (users ${offset + 1}-${offset + users.length} of ${totalUsers})`
+    );
+
+    // Process each user in the batch
+    for (const user of users) {
+      try {
+        // Wrap in timeout to prevent one slow user from blocking
+        const result = await withTimeout(
+          recalculateAllScores(db, user.id),
+          USER_PROCESS_TIMEOUT,
+          `Score recalc timeout for user ${user.id}`
+        );
+        scoresUpdated += result.updated;
+        usersProcessed++;
+      } catch (err) {
+        errors++;
+        console.error(`[cron:scoreRecalc] Failed for user ${user.id}:`, err);
+      }
+    }
+
+    offset += USER_BATCH_SIZE;
+  }
+
+  return {
+    totalUsers,
+    usersProcessed,
+    scoresUpdated,
+    errors,
+    batches: batchNumber,
+  };
+}
+
+/**
  * Recalculate health statuses for all contacts.
  *
  * Runs Monday 6am UTC weekly. Ensures dashboard shows accurate health.
@@ -431,4 +526,35 @@ async function healthRecalculation(env: Env): Promise<Record<string, unknown>> {
     usersProcessed: result.usersProcessed,
     contactsUpdated: result.contactsUpdated,
   };
+}
+
+// ===========================================================================
+// Utility Functions
+// ===========================================================================
+
+/**
+ * Wrap a promise with a timeout.
+ * Rejects if the promise doesn't resolve within the given time.
+ */
+async function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  errorMessage: string
+): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout>;
+
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(new Error(errorMessage));
+    }, ms);
+  });
+
+  try {
+    const result = await Promise.race([promise, timeoutPromise]);
+    clearTimeout(timeoutId!);
+    return result;
+  } catch (err) {
+    clearTimeout(timeoutId!);
+    throw err;
+  }
 }
