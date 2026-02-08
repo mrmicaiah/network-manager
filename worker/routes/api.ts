@@ -13,7 +13,7 @@
  *   /api/braindump/*     — Parse natural language contact dumps
  *   /api/export/*        — CSV export with filters
  *   /api/import/*        — CSV import and bulk import flow
- *   /api/user/*          — Profile read/update, notification preferences
+ *   /api/user/*          — Profile read/update, notification preferences, account deletion
  *   /api/subscription/*  — Tier info, checkout, portal
  *   /api/dashboard/*     — Dashboard tabs and dartboard data
  *   /api/stripe/webhook  — Stripe webhook handler (no auth)
@@ -73,6 +73,7 @@ import {
   createCheckoutSession,
   createPortalSession,
   handleWebhook,
+  cancelAllSubscriptions,
 } from '../services/stripe-service';
 import { parseBraindump } from '../services/braindump-service';
 import {
@@ -207,6 +208,8 @@ export async function handleApiRoute(
       response = await handleGetUser(auth.auth);
     } else if (path === '/api/user' && method === 'PATCH') {
       response = await handleUpdateUser(request, db, user.id);
+    } else if (path === '/api/user' && method === 'DELETE') {
+      response = await handleDeleteUser(request, env, db, auth.auth);
     } else if (path === '/api/user/preferences' && method === 'PATCH') {
       response = await handleUpdateUserPreferences(request, db, user.id);
     } else if (path === '/api/user/notifications' && method === 'GET') {
@@ -830,6 +833,168 @@ async function handleUpdateUser(
     .first();
 
   return jsonResponse({ data: user });
+}
+
+/**
+ * Delete user account and all associated data.
+ *
+ * This is a destructive operation that:
+ *   1. Cancels any active Stripe subscriptions
+ *   2. Deletes all user data in the correct order (respecting foreign keys)
+ *   3. Logs the deletion for audit purposes
+ *
+ * Requires explicit confirmation in request body: { confirm: true }
+ *
+ * Deletion order:
+ *   1. circle_scores (references contacts)
+ *   2. contact_circles (references contacts)
+ *   3. interactions (references user)
+ *   4. nudges (references user)
+ *   5. usage_tracking (references user)
+ *   6. contacts (references user)
+ *   7. circles (references user)
+ *   8. verification_codes (references user phone)
+ *   9. sessions (references user)
+ *   10. users
+ */
+async function handleDeleteUser(
+  request: Request,
+  env: Env,
+  db: D1Database,
+  auth: AuthContext,
+): Promise<Response> {
+  const { user } = auth;
+
+  // Parse request body for confirmation
+  let body: { confirm?: boolean } = {};
+  try {
+    body = await request.json();
+  } catch {
+    // Empty body is fine, will fail confirmation check
+  }
+
+  if (body.confirm !== true) {
+    return errorResponse(
+      'Account deletion requires explicit confirmation. Send { "confirm": true } in the request body.',
+      400,
+      'confirmation_required',
+    );
+  }
+
+  console.log(`[api] Account deletion requested for user ${user.id} (${user.phone})`);
+
+  try {
+    // Step 1: Cancel Stripe subscriptions if user has a customer ID
+    let stripeCanceled = 0;
+    if (user.stripe_customer_id) {
+      console.log(`[api] Canceling Stripe subscriptions for customer ${user.stripe_customer_id}`);
+      const stripeResult = await cancelAllSubscriptions(env, user.stripe_customer_id);
+      stripeCanceled = stripeResult.canceled;
+      if (stripeResult.errors.length > 0) {
+        console.warn('[api] Stripe cancellation errors:', stripeResult.errors);
+      }
+    }
+
+    // Step 2: Delete all user data in correct order
+    // Get contact IDs first for cascade deletes
+    const { results: contacts } = await db
+      .prepare('SELECT id FROM contacts WHERE user_id = ?')
+      .bind(user.id)
+      .all<{ id: string }>();
+
+    const contactIds = contacts.map((c) => c.id);
+
+    // Delete circle_scores for user's contacts
+    if (contactIds.length > 0) {
+      const placeholders = contactIds.map(() => '?').join(',');
+      await db
+        .prepare(`DELETE FROM circle_scores WHERE contact_id IN (${placeholders})`)
+        .bind(...contactIds)
+        .run();
+    }
+
+    // Delete contact_circles for user's contacts
+    if (contactIds.length > 0) {
+      const placeholders = contactIds.map(() => '?').join(',');
+      await db
+        .prepare(`DELETE FROM contact_circles WHERE contact_id IN (${placeholders})`)
+        .bind(...contactIds)
+        .run();
+    }
+
+    // Delete interactions
+    await db
+      .prepare('DELETE FROM interactions WHERE user_id = ?')
+      .bind(user.id)
+      .run();
+
+    // Delete nudges
+    await db
+      .prepare('DELETE FROM nudges WHERE user_id = ?')
+      .bind(user.id)
+      .run();
+
+    // Delete usage_tracking
+    await db
+      .prepare('DELETE FROM usage_tracking WHERE user_id = ?')
+      .bind(user.id)
+      .run();
+
+    // Delete contacts
+    await db
+      .prepare('DELETE FROM contacts WHERE user_id = ?')
+      .bind(user.id)
+      .run();
+
+    // Delete circles
+    await db
+      .prepare('DELETE FROM circles WHERE user_id = ?')
+      .bind(user.id)
+      .run();
+
+    // Delete verification codes by phone
+    await db
+      .prepare('DELETE FROM verification_codes WHERE phone = ?')
+      .bind(user.phone)
+      .run();
+
+    // Delete sessions
+    await db
+      .prepare('DELETE FROM sessions WHERE user_id = ?')
+      .bind(user.id)
+      .run();
+
+    // Finally, delete the user
+    await db
+      .prepare('DELETE FROM users WHERE id = ?')
+      .bind(user.id)
+      .run();
+
+    console.log(`[api] Account deletion completed for user ${user.id}`);
+
+    // Clear the session cookie
+    const response = jsonResponse({
+      data: {
+        deleted: true,
+        message: 'Account and all data permanently deleted',
+        stripeSubscriptionsCanceled: stripeCanceled,
+      },
+    });
+
+    // Add cookie clear header
+    response.headers.set(
+      'Set-Cookie',
+      'session=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0',
+    );
+
+    return response;
+  } catch (err) {
+    console.error('[api] Account deletion failed:', err);
+    return errorResponse(
+      `Failed to delete account: ${err instanceof Error ? err.message : 'Unknown error'}`,
+      500,
+    );
+  }
 }
 
 /**
