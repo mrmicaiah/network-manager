@@ -12,13 +12,14 @@
  *   7. Create a one-time login token for auto-login redirect
  *   8. Trigger Bethany's intro message via initializeOnboarding()
  *      (SendBlue send-first registers the contact for inbound routing)
- *   9. Return success JSON with redirect URL containing login token
+ *   9. Return success JSON with redirect URL to worker's /auth/callback
  *
  * GET /signup:
- *   Redirects to the landing page at bethany.untitledpublishers.com/signup
+ *   Redirects to the landing page
  *
  * GET /auth/callback?token=xxx:
  *   Exchanges the one-time token for a session cookie and redirects to welcome page
+ *   Cookie is set for the worker domain, so dashboard API calls will include it.
  *
  * @see worker/services/onboarding-service.ts for initializeOnboarding()
  * @see worker/services/circle-service.ts for initializeDefaultCircles()
@@ -242,6 +243,7 @@ export async function handleSignupPost(
   ctx: ExecutionContext,
 ): Promise<Response> {
   const origin = request.headers.get('Origin');
+  const workerUrl = new URL(request.url).origin; // e.g. https://network-manager.micaiah-tasks.workers.dev
   
   // Parse body
   let input: Partial<SignupFormInput>;
@@ -371,10 +373,11 @@ export async function handleSignupPost(
     })()
   );
 
-  // Determine redirect URL
+  // Determine redirect URL - go to WORKER's auth/callback so cookie is set for worker domain
+  // The worker will then redirect to the dashboard
   const dashboardUrl = env.DASHBOARD_URL || 'https://network-manager.pages.dev';
   const redirectUrl = loginToken
-    ? `${dashboardUrl}/auth/callback?token=${loginToken}`
+    ? `${workerUrl}/auth/callback?token=${loginToken}`
     : `${dashboardUrl}/login?welcome=true`;
 
   // Return success
@@ -398,6 +401,9 @@ export async function handleSignupPost(
 /**
  * Exchange a one-time login token for a session cookie.
  * Redirects to the welcome page on success, login page on failure.
+ * 
+ * Cookie is set for the worker domain. When the dashboard makes API
+ * calls to the worker with credentials:include, the cookie is sent.
  */
 export async function handleSignupComplete(
   request: Request,
@@ -433,6 +439,7 @@ export async function handleSignupComplete(
   const sessionCookie = buildSessionCookie(sessionToken);
   
   // Redirect to welcome page with session cookie
+  // Cookie is for the worker domain, dashboard will send it with API calls
   return new Response(null, {
     status: 302,
     headers: {
