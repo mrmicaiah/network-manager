@@ -44,14 +44,23 @@ new_sqlite_classes = ["OnboardingDO", "UserDiscoveryDO", "NudgeContextDO", "Inte
 
 # ===========================================================================
 # Cron Triggers
+#
+# Schedule (all times UTC):
+#   0 * * * *    → Hourly: timezone-aware nudge generation, delivery, sorting
+#   0 0 * * *    → Midnight UTC: trial expiration, usage cleanup
+#   0 1 * * *    → 1 AM UTC: daily score recalculation (point decay)
+#   0 6 * * 1    → Monday 6am UTC: weekly health recalculation
+#   0 9 * * *    → 9 AM UTC: (legacy nudge gen, kept for compatibility)
+#   0 10 * * 1   → Monday 10am UTC: (legacy sorting, kept for compatibility)
 # ===========================================================================
 [triggers]
 crons = [
   "0 * * * *",
+  "0 0 * * *",
+  "0 1 * * *",
+  "0 6 * * 1",
   "0 9 * * *",
   "0 10 * * 1",
-  "0 0 * * *",
-  "0 6 * * 1",
 ]
 
 [vars]
