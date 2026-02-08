@@ -687,15 +687,14 @@ export type RoleName = 'user' | 'admin' | 'superadmin';
 
 /**
  * Permission resource — the entity a permission applies to.
+ * Matches the seeded resources in migrations/0011_rbac_seed_data.sql.
  * Extensible as new admin features are added.
  */
 export type PermissionResource =
-  | 'users'
-  | 'billing'
-  | 'contacts'
-  | 'roles'
-  | 'permissions'
-  | 'audit_log';
+  | 'users'      // User accounts and profiles
+  | 'stats'      // Admin dashboard statistics
+  | 'activity'   // Audit log and activity feed
+  | 'roles';     // Role and permission management
 
 /**
  * Permission action — what can be done to a resource.
@@ -820,15 +819,17 @@ export interface CreateAuditLogInput {
 
 /**
  * Default roles seeded on first deploy.
+ * @see migrations/0011_rbac_seed_data.sql
  */
 export const DEFAULT_ROLES: Array<{ name: RoleName; description: string }> = [
-  { name: 'user', description: 'Standard user — access to own data only' },
-  { name: 'admin', description: 'Admin — can view and manage all users and data' },
-  { name: 'superadmin', description: 'Super admin — full system access including role management' },
+  { name: 'user', description: 'Standard user — no admin access' },
+  { name: 'admin', description: 'Admin — can view dashboard, manage users, view stats' },
+  { name: 'superadmin', description: 'Super admin — full access including role management' },
 ];
 
 /**
  * Default permissions seeded on first deploy.
+ * Matches migrations/0011_rbac_seed_data.sql exactly.
  * Uses resource:action naming convention.
  */
 export const DEFAULT_PERMISSIONS: Array<{
@@ -837,15 +838,26 @@ export const DEFAULT_PERMISSIONS: Array<{
   action: PermissionAction;
   description: string;
 }> = [
-  { name: 'users:read', resource: 'users', action: 'read', description: 'View user profiles and data' },
-  { name: 'users:write', resource: 'users', action: 'write', description: 'Edit user profiles' },
+  // Users
+  { name: 'users:read', resource: 'users', action: 'read', description: 'View user list and details' },
+  { name: 'users:write', resource: 'users', action: 'write', description: 'Edit user details, change subscription tier' },
   { name: 'users:delete', resource: 'users', action: 'delete', description: 'Delete user accounts' },
-  { name: 'users:manage', resource: 'users', action: 'manage', description: 'Full user management (lock, unlock, tier changes)' },
-  { name: 'billing:read', resource: 'billing', action: 'read', description: 'View billing and subscription data' },
-  { name: 'billing:manage', resource: 'billing', action: 'manage', description: 'Manage subscriptions and billing' },
-  { name: 'contacts:read', resource: 'contacts', action: 'read', description: "View any user's contacts" },
-  { name: 'contacts:write', resource: 'contacts', action: 'write', description: "Edit any user's contacts" },
-  { name: 'roles:read', resource: 'roles', action: 'read', description: 'View roles and assignments' },
-  { name: 'roles:manage', resource: 'roles', action: 'manage', description: 'Create, edit, delete roles and assign permissions' },
-  { name: 'audit_log:read', resource: 'audit_log', action: 'read', description: 'View admin audit trail' },
+  // Stats
+  { name: 'stats:read', resource: 'stats', action: 'read', description: 'View admin dashboard stats' },
+  // Activity
+  { name: 'activity:read', resource: 'activity', action: 'read', description: 'View audit log and activity feed' },
+  // Roles
+  { name: 'roles:read', resource: 'roles', action: 'read', description: 'View roles and permissions' },
+  { name: 'roles:write', resource: 'roles', action: 'write', description: 'Assign and remove roles from users' },
+  { name: 'roles:manage', resource: 'roles', action: 'manage', description: 'Create, edit, and delete roles and permissions' },
 ];
+
+/**
+ * Deterministic role IDs — match migrations/0011_rbac_seed_data.sql.
+ * Use these constants instead of querying for role IDs by name.
+ */
+export const ROLE_IDS = {
+  user: 'role-user-00000000-0000-0000-0001',
+  admin: 'role-admin-0000000-0000-0000-0002',
+  superadmin: 'role-superadmin-000-0000-0000-0003',
+} as const;
