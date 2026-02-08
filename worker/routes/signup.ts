@@ -9,9 +9,10 @@
  *   4. Create user record in D1 (with onboarding_stage = 'intro_sent')
  *   5. Initialize default circles (Family, Friends, Work, Community)
  *   6. Start 14-day trial
- *   7. Trigger Bethany's intro message via initializeOnboarding()
+ *   7. Create session token and cookie (auto-login)
+ *   8. Trigger Bethany's intro message via initializeOnboarding()
  *      (SendBlue send-first registers the contact for inbound routing)
- *   8. Return success JSON
+ *   9. Return success JSON with Set-Cookie header
  *
  * GET /signup:
  *   Redirects to the landing page at bethany.untitledpublishers.com/signup
@@ -19,6 +20,7 @@
  * @see worker/services/onboarding-service.ts for initializeOnboarding()
  * @see worker/services/circle-service.ts for initializeDefaultCircles()
  * @see worker/services/subscription-service.ts for initializeTrial()
+ * @see worker/services/auth-service.ts for session creation
  */
 
 import type { Env } from '../../shared/types';
@@ -28,6 +30,7 @@ import { getUserByPhone } from '../services/user-service';
 import { initializeDefaultCircles } from '../services/circle-service';
 import { initializeTrial } from '../services/subscription-service';
 import { initializeOnboarding } from '../services/onboarding-service';
+import { createSessionToken, buildSessionCookie } from '../services/auth-service';
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -53,6 +56,7 @@ export interface SignupSuccess {
   userId: string;
   name: string;
   message: string;
+  redirectUrl: string;
 }
 
 export interface SignupError {
@@ -192,7 +196,8 @@ export async function handleSignupPost(
 
   // Create user
   const userId = crypto.randomUUID();
-  const now = new Date().toISOString();
+  const now = new Date();
+  const nowIso = now.toISOString();
   const initialStage: OnboardingStage = 'intro_sent';
 
   try {
@@ -203,7 +208,7 @@ export async function handleSignupPost(
             onboarding_stage, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, 'trial', ?, ?, ?)`
       )
-      .bind(userId, phone, email, name, pinHash, initialStage, now, now)
+      .bind(userId, phone, email, name, pinHash, initialStage, nowIso, nowIso)
       .run();
   } catch (err) {
     console.error('[signup] User creation failed:', err);
@@ -213,7 +218,7 @@ export async function handleSignupPost(
     );
   }
 
-  console.log(`[signup] User created: ${name} (${phone}) → ${userId}`);
+  console.log(`[signup] User created: ${name} (${phone}) -> ${userId}`);
 
   // Initialize default circles
   try {
@@ -232,6 +237,38 @@ export async function handleSignupPost(
     console.error('[signup] Trial initialization failed:', err);
     // Non-fatal — defaults to trial tier from schema
   }
+
+  // Create session token for auto-login
+  // Build a minimal UserRow for token creation
+  const userForSession: UserRow = {
+    id: userId,
+    phone,
+    email,
+    name,
+    pin_hash: pinHash,
+    subscription_tier: 'trial',
+    onboarding_stage: initialStage,
+    created_at: nowIso,
+    updated_at: nowIso,
+    // Default values for other fields
+    gender: null,
+    trial_ends_at: null,
+    stripe_customer_id: null,
+    stripe_subscription_id: null,
+    default_circle_id: null,
+    circle_tab_order: null,
+    timezone: 'America/New_York',
+    preferred_nudge_hour: 9,
+    nudge_frequency: 'daily',
+    quiet_hours_start: null,
+    quiet_hours_end: null,
+    last_pin_verified: null,
+    failed_pin_attempts: 0,
+    account_locked: 0,
+  };
+
+  const sessionToken = await createSessionToken(userForSession, env.PIN_SIGNING_SECRET, now);
+  const sessionCookie = buildSessionCookie(sessionToken, now);
 
   // Trigger Bethany's intro message (non-blocking)
   // This is critical — SendBlue requires send-first to register
@@ -253,17 +290,30 @@ export async function handleSignupPost(
     })()
   );
 
-  // Return success immediately
-  // The intro message sends in the background via ctx.waitUntil
-  return jsonResponse(
-    {
+  // Determine redirect URL (dashboard with onboarding flag)
+  const dashboardUrl = env.DASHBOARD_URL || 'https://network-manager.pages.dev';
+  const redirectUrl = `${dashboardUrl}/welcome`;
+
+  // Return success with session cookie
+  const response = new Response(
+    JSON.stringify({
       success: true,
       userId,
       name,
-      message: 'Account created! Check your texts — Bethany is reaching out.',
-    } as SignupSuccess,
-    201,
+      message: 'Account created! Check your texts - Bethany is reaching out.',
+      redirectUrl,
+    } as SignupSuccess),
+    {
+      status: 201,
+      headers: {
+        ...corsHeaders,
+        'Content-Type': 'application/json',
+        'Set-Cookie': sessionCookie,
+      },
+    },
   );
+
+  return response;
 }
 
 // ---------------------------------------------------------------------------
