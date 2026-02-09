@@ -112,7 +112,7 @@ export async function handleApiRoute(
     return handleVerifyCode(request, env);
   }
   if (path === '/api/auth/logout' && method === 'POST') {
-    return handleLogout();
+    return handleLogout(request);
   }
   if (path === '/api/auth/me' && method === 'GET') {
     return handleGetMe(request, env);
