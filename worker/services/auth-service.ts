@@ -50,7 +50,7 @@
 
 import type { Env } from '../../shared/types';
 import type { UserRow } from '../../shared/models';
-import { corsHeaders } from '../../shared/http';
+import { getCorsHeaders } from '../../shared/http';
 import { getUserByPhone } from './user-service';
 import { getUserRoles, getUserPermissions } from './permission-service';
 
@@ -134,12 +134,18 @@ export type SessionValidation =
 
 /**
  * Create a JSON response with CORS headers.
+ * Uses dynamic origin matching for cross-origin requests.
  */
-function jsonAuthResponse(data: unknown, status = 200, extraHeaders?: Record<string, string>): Response {
+function jsonAuthResponse(
+  data: unknown,
+  status = 200,
+  origin?: string | null,
+  extraHeaders?: Record<string, string>,
+): Response {
   return new Response(JSON.stringify(data), {
     status,
     headers: {
-      ...corsHeaders,
+      ...getCorsHeaders(origin),
       'Content-Type': 'application/json',
       ...extraHeaders,
     },
@@ -585,11 +591,12 @@ export async function requireAuth(
   | { valid: false; response: Response }
 > {
   const token = extractToken(request);
+  const origin = request.headers.get('Origin');
 
   if (!token) {
     return {
       valid: false,
-      response: buildAuthErrorResponse('missing', 'No session found. Please log in.'),
+      response: buildAuthErrorResponse('missing', 'No session found. Please log in.', origin),
     };
   }
 
@@ -598,7 +605,7 @@ export async function requireAuth(
   if (!result.valid) {
     return {
       valid: false,
-      response: buildAuthErrorResponse(result.reason, result.message),
+      response: buildAuthErrorResponse(result.reason, result.message, origin),
     };
   }
 
@@ -615,7 +622,7 @@ export async function requireAuth(
  * Returns 401 with a JSON body and a clear-session cookie
  * so the browser doesn't keep sending an invalid token.
  */
-function buildAuthErrorResponse(reason: string, message: string): Response {
+function buildAuthErrorResponse(reason: string, message: string, origin?: string | null): Response {
   return new Response(
     JSON.stringify({
       error: message,
@@ -626,7 +633,7 @@ function buildAuthErrorResponse(reason: string, message: string): Response {
     {
       status: 401,
       headers: {
-        ...corsHeaders,
+        ...getCorsHeaders(origin),
         'Content-Type': 'application/json',
         'Set-Cookie': buildLogoutCookie(),
       },
@@ -664,24 +671,26 @@ export async function handleSendCode(
   request: Request,
   env: Env,
 ): Promise<Response> {
+  const origin = request.headers.get('Origin');
   const body = await request.json<{ phone?: string }>();
+  
   if (!body.phone) {
-    return jsonAuthResponse({ error: 'Phone number is required.' }, 400);
+    return jsonAuthResponse({ error: 'Phone number is required.' }, 400, origin);
   }
 
   const phone = normalizePhone(body.phone);
   if (!phone) {
-    return jsonAuthResponse({ error: 'Invalid phone number format.' }, 400);
+    return jsonAuthResponse({ error: 'Invalid phone number format.' }, 400, origin);
   }
 
   const result = await sendVerificationCode(env.DB, env, phone);
 
   if (!result.success) {
     const statusCode = result.reason === 'rate_limited' ? 429 : 400;
-    return jsonAuthResponse({ error: result.message, reason: result.reason }, statusCode);
+    return jsonAuthResponse({ error: result.message, reason: result.reason }, statusCode, origin);
   }
 
-  return jsonAuthResponse({ success: true, expiresInMinutes: result.expiresInMinutes });
+  return jsonAuthResponse({ success: true, expiresInMinutes: result.expiresInMinutes }, 200, origin);
 }
 
 /**
@@ -694,14 +703,16 @@ export async function handleVerifyCode(
   request: Request,
   env: Env,
 ): Promise<Response> {
+  const origin = request.headers.get('Origin');
   const body = await request.json<{ phone?: string; code?: string }>();
+  
   if (!body.phone || !body.code) {
-    return jsonAuthResponse({ error: 'Phone number and code are required.' }, 400);
+    return jsonAuthResponse({ error: 'Phone number and code are required.' }, 400, origin);
   }
 
   const phone = normalizePhone(body.phone);
   if (!phone) {
-    return jsonAuthResponse({ error: 'Invalid phone number format.' }, 400);
+    return jsonAuthResponse({ error: 'Invalid phone number format.' }, 400, origin);
   }
 
   const result = await verifyCode(env.DB, env, phone, body.code.trim());
@@ -714,6 +725,7 @@ export async function handleVerifyCode(
         attemptsRemaining: 'attemptsRemaining' in result ? result.attemptsRemaining : undefined,
       },
       401,
+      origin,
     );
   }
 
@@ -730,6 +742,7 @@ export async function handleVerifyCode(
       },
     },
     200,
+    origin,
     { 'Set-Cookie': result.cookie },
   );
 }
@@ -739,10 +752,12 @@ export async function handleVerifyCode(
  *
  * Clears the session cookie. No body needed.
  */
-export async function handleLogout(): Promise<Response> {
+export async function handleLogout(request?: Request): Promise<Response> {
+  const origin = request?.headers.get('Origin');
   return jsonAuthResponse(
     { success: true, message: 'Logged out.' },
     200,
+    origin,
     { 'Set-Cookie': buildLogoutCookie() },
   );
 }
@@ -757,6 +772,7 @@ export async function handleGetMe(
   request: Request,
   env: Env,
 ): Promise<Response> {
+  const origin = request.headers.get('Origin');
   const auth = await requireAuth(request, env);
   if (!auth.valid) return auth.response;
 
@@ -766,17 +782,21 @@ export async function handleGetMe(
     getUserPermissions(env.DB, auth.auth.user.id),
   ]);
 
-  let response = jsonAuthResponse({
-    user: {
-      id: auth.auth.user.id,
-      name: auth.auth.user.name,
-      phone: auth.auth.user.phone,
-      email: auth.auth.user.email,
-      subscriptionTier: auth.auth.user.subscription_tier,
-      roles,
-      permissions,
+  let response = jsonAuthResponse(
+    {
+      user: {
+        id: auth.auth.user.id,
+        name: auth.auth.user.name,
+        phone: auth.auth.user.phone,
+        email: auth.auth.user.email,
+        subscriptionTier: auth.auth.user.subscription_tier,
+        roles,
+        permissions,
+      },
     },
-  });
+    200,
+    origin,
+  );
 
   if (auth.refreshedCookie) {
     response = withRefreshedSession(response, auth.refreshedCookie);
