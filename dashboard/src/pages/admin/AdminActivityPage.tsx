@@ -14,7 +14,6 @@ import {
   Activity,
   Download,
   Shield,
-  UserCog,
   Trash2,
   Edit3,
   UserPlus,
@@ -313,8 +312,6 @@ export default function AdminActivityPage() {
     if (resourceType) params.set('resource_type', resourceType);
     if (dateFrom) params.set('date_from', dateFrom);
     if (dateTo) params.set('date_to', dateTo);
-    // Note: search by user name isn't directly supported by the API,
-    // but we filter client-side for now if needed.
 
     try {
       const res = await fetch(`${API_URL}/api/admin/activity?${params.toString()}`, {
