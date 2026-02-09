@@ -533,6 +533,30 @@ export interface UserWithSubscription extends UserRow {
 }
 
 /**
+ * /api/auth/me response shape — returned by handleGetMe.
+ * Includes RBAC roles and permissions so the frontend can
+ * show/hide admin UI and guard admin routes client-side.
+ *
+ * Regular users get empty arrays for both fields.
+ *
+ * @see worker/services/auth-service.ts handleGetMe()
+ * @see worker/services/permission-service.ts
+ */
+export interface MeResponse {
+  user: {
+    id: string;
+    name: string;
+    phone: string;
+    email: string | null;
+    subscriptionTier: SubscriptionTier;
+    /** Role names assigned to this user (e.g., ['user', 'admin']) */
+    roles: string[];
+    /** Permission strings the user has (e.g., ['users:read', 'stats:read']) */
+    permissions: string[];
+  };
+}
+
+/**
  * Onboarding conversation state — stored in Durable Object.
  * Not persisted in D1; lives only during the onboarding flow.
  *
