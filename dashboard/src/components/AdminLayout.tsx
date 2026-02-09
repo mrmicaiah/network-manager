@@ -1,18 +1,15 @@
 import { useState } from 'react';
-import { Outlet, NavLink, useNavigate } from 'react-router-dom';
+import { Outlet, NavLink, useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { usePermissions } from '../hooks/usePermissions';
 import {
   LayoutDashboard,
   Users,
-  Brain,
-  Upload,
-  Settings,
+  Activity,
+  ArrowLeft,
   Menu,
   X,
   LogOut,
   ChevronDown,
-  Sparkles,
   Shield,
 } from 'lucide-react';
 
@@ -20,21 +17,18 @@ import {
 // Navigation Items
 // ===========================================================================
 
-const navItems = [
-  { to: '/overview', label: 'Overview', icon: LayoutDashboard },
-  { to: '/contacts', label: 'Contacts', icon: Users },
-  { to: '/braindump', label: 'Braindump', icon: Brain },
-  { to: '/import', label: 'Import', icon: Upload },
-  { to: '/settings', label: 'Settings', icon: Settings },
+const adminNavItems = [
+  { to: '/admin', label: 'Overview', icon: LayoutDashboard, end: true },
+  { to: '/admin/users', label: 'Users', icon: Users },
+  { to: '/admin/activity', label: 'Activity', icon: Activity },
 ];
 
 // ===========================================================================
-// Layout Component
+// Admin Layout Component
 // ===========================================================================
 
-export function DashboardLayout() {
+export function AdminLayout() {
   const { user, logout } = useAuth();
-  const { isAdmin } = usePermissions();
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
@@ -42,21 +36,6 @@ export function DashboardLayout() {
   const handleLogout = async () => {
     await logout();
     navigate('/login');
-  };
-
-  const subscriptionBadge = () => {
-    if (user?.subscriptionTier === 'premium') {
-      return (
-        <span className="badge-primary flex items-center gap-1">
-          <Sparkles className="w-3 h-3" />
-          Premium
-        </span>
-      );
-    }
-    if (user?.subscriptionTier === 'trial') {
-      return <span className="badge-warning">Trial</span>;
-    }
-    return <span className="badge-neutral">Free</span>;
   };
 
   return (
@@ -81,10 +60,10 @@ export function DashboardLayout() {
         {/* Sidebar header */}
         <div className="h-16 flex items-center justify-between px-4 border-b border-cream-dark">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 bg-bethany-500 rounded-xl flex items-center justify-center shadow-warm">
-              <span className="text-warm-white font-display font-semibold text-lg">B</span>
+            <div className="w-9 h-9 bg-charcoal rounded-xl flex items-center justify-center shadow-warm">
+              <Shield className="w-5 h-5 text-warm-white" />
             </div>
-            <span className="font-display font-medium text-charcoal text-lg">Bethany</span>
+            <span className="font-display font-medium text-charcoal text-lg">Admin</span>
           </div>
           <button
             onClick={() => setSidebarOpen(false)}
@@ -96,10 +75,11 @@ export function DashboardLayout() {
 
         {/* Navigation */}
         <nav className="p-3 space-y-1">
-          {navItems.map((item) => (
+          {adminNavItems.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}
+              end={item.end}
               onClick={() => setSidebarOpen(false)}
               className={({ isActive }) =>
                 `nav-item ${isActive ? 'active' : ''}`
@@ -109,31 +89,17 @@ export function DashboardLayout() {
               {item.label}
             </NavLink>
           ))}
-
-          {/* Admin link — only visible to admins */}
-          {isAdmin && (
-            <>
-              <div className="border-t border-cream-dark my-2" />
-              <NavLink
-                to="/admin"
-                onClick={() => setSidebarOpen(false)}
-                className={({ isActive }) =>
-                  `nav-item ${isActive ? 'active' : ''}`
-                }
-              >
-                <Shield className="w-5 h-5" />
-                Admin
-              </NavLink>
-            </>
-          )}
         </nav>
 
-        {/* Sidebar footer — subscription badge */}
+        {/* Sidebar footer — back to dashboard */}
         <div className="absolute bottom-0 left-0 right-0 p-4 border-t border-cream-dark">
-          <div className="flex items-center justify-between text-sm">
-            <span className="text-charcoal-light">Plan</span>
-            {subscriptionBadge()}
-          </div>
+          <Link
+            to="/overview"
+            className="flex items-center gap-2 text-sm text-charcoal-light hover:text-charcoal transition-colors"
+          >
+            <ArrowLeft className="w-4 h-4" />
+            Back to Dashboard
+          </Link>
         </div>
       </aside>
 
@@ -149,8 +115,13 @@ export function DashboardLayout() {
             <Menu className="w-5 h-5" />
           </button>
 
-          {/* Page title placeholder — pages can override via document.title */}
-          <div className="hidden lg:block" />
+          {/* Admin badge */}
+          <div className="hidden lg:flex items-center gap-2">
+            <span className="badge-neutral flex items-center gap-1">
+              <Shield className="w-3 h-3" />
+              Admin Panel
+            </span>
+          </div>
 
           {/* User menu */}
           <div className="relative">
@@ -158,13 +129,13 @@ export function DashboardLayout() {
               onClick={() => setUserMenuOpen(!userMenuOpen)}
               className="flex items-center gap-2 p-2 rounded-xl hover:bg-cream-dark transition-colors"
             >
-              <div className="w-8 h-8 bg-blush rounded-xl flex items-center justify-center">
-                <span className="text-bethany-600 font-medium text-sm">
+              <div className="w-8 h-8 bg-charcoal-200 rounded-xl flex items-center justify-center">
+                <span className="text-charcoal font-medium text-sm">
                   {user?.name?.charAt(0)?.toUpperCase() || '?'}
                 </span>
               </div>
               <span className="hidden sm:block text-sm font-medium text-charcoal">
-                {user?.name || 'User'}
+                {user?.name || 'Admin'}
               </span>
               <ChevronDown className="w-4 h-4 text-charcoal-light" />
             </button>
@@ -181,6 +152,14 @@ export function DashboardLayout() {
                     <p className="text-sm font-medium text-charcoal">{user?.name}</p>
                     <p className="text-xs text-charcoal-light truncate">{user?.phone}</p>
                   </div>
+                  <Link
+                    to="/overview"
+                    onClick={() => setUserMenuOpen(false)}
+                    className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-charcoal-light hover:text-charcoal hover:bg-cream-dark transition-colors"
+                  >
+                    <ArrowLeft className="w-4 h-4" />
+                    Back to Dashboard
+                  </Link>
                   <button
                     onClick={handleLogout}
                     className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-charcoal-light hover:text-charcoal hover:bg-cream-dark transition-colors"

@@ -24,6 +24,8 @@ export interface User {
   phone: string;
   email: string | null;
   subscriptionTier: 'free' | 'trial' | 'premium';
+  roles: string[];
+  permissions: string[];
 }
 
 interface AuthState {
@@ -78,7 +80,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (res.ok) {
         const data = await res.json();
         setState({
-          user: data.user,
+          user: {
+            id: data.user.id,
+            name: data.user.name,
+            phone: data.user.phone,
+            email: data.user.email,
+            subscriptionTier: data.user.subscriptionTier,
+            roles: data.user.roles ?? [],
+            permissions: data.user.permissions ?? [],
+          },
           isLoading: false,
           isAuthenticated: true,
         });
@@ -131,11 +141,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const data = await res.json();
 
       if (res.ok && data.success) {
-        setState({
-          user: data.user,
-          isLoading: false,
-          isAuthenticated: true,
-        });
+        // After login, fetch full user info including roles/permissions
+        await checkSession();
         return { success: true };
       } else {
         return {
