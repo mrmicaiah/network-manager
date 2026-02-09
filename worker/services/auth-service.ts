@@ -1004,7 +1004,7 @@ async function sendSms(
         number: to,
         content: message,
         from_number: env.SENDBLUE_PHONE_NUMBER,
-        send_style: 'invisible',
+        send_style: 'regular',
       }),
     });
 
