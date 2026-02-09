@@ -1003,9 +1003,15 @@ async function sendSms(
       body: JSON.stringify({
         number: to,
         content: message,
+        from_number: env.SENDBLUE_PHONE_NUMBER,
         send_style: 'invisible',
       }),
     });
+
+    if (!response.ok) {
+      const body = await response.text();
+      console.error(`[auth] SendBlue send failed (${response.status}):`, body);
+    }
 
     return response.ok;
   } catch (err) {
