@@ -35,6 +35,10 @@ export interface Env {
   STRIPE_WEBHOOK_SECRET: string;
   STRIPE_PRICE_ID: string;
 
+  // Secrets — Google OAuth (for contacts import)
+  GOOGLE_CLIENT_ID: string;
+  GOOGLE_CLIENT_SECRET: string;
+
   // Vars
   ENVIRONMENT: string;
   SIGNUP_BASE_URL: string;   // Base URL for signup links
