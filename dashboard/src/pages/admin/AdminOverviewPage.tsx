@@ -1,6 +1,7 @@
-// Admin Overview — v2 rebuild trigger
+// Admin Overview — v3 with centralized config
 import { useNavigate, Link } from 'react-router-dom';
 import { useApi } from '../../hooks/useApi';
+import { API_URL } from '../../config';
 import {
   Users,
   UserPlus,
@@ -17,8 +18,6 @@ import {
 // ===========================================================================
 // Types
 // ===========================================================================
-
-const API_URL = import.meta.env.VITE_API_URL || '';
 
 interface AdminStats {
   totalUsers: number;
