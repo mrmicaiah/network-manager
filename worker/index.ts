@@ -5,6 +5,7 @@
  *   - Web signup (GET = page, POST = create account)
  *   - SMS webhook routing (inbound messages from SendBlue)
  *   - Dashboard API endpoints
+ *   - Google OAuth callback (unauthenticated redirect from Google)
  *   - Cron triggers for nudges and health checks
  *   - Internal API for service communication
  *
@@ -21,6 +22,7 @@ import { handleSmsWebhook } from './routes/sms';
 import { handleSignupPost, handleSignupPage, handleSignupComplete } from './routes/signup';
 import { handleApiRoute } from './routes/api';
 import { handleScheduled } from './cron/scheduled';
+import { handleGoogleCallback } from './routes/google-auth';
 
 // Re-export Durable Object classes — Wrangler requires these at the entry point
 export { OnboardingDO } from './services/onboarding-service';
@@ -30,8 +32,8 @@ export { NudgeContextDO } from './services/nudge-conversation-flow';
 export { IntentContextDO as IntentSortingDO } from './services/intent-assignment-flow';
 
 const VERSION = {
-  version: '0.12.1',
-  updated: '2026-02-08',
+  version: '0.13.0',
+  updated: '2026-02-10',
   codename: 'network-manager',
 };
 
@@ -83,6 +85,17 @@ export default {
       // Token exchange for post-signup redirect
       if (url.pathname === '/auth/callback' && request.method === 'GET') {
         return handleSignupComplete(request, env);
+      }
+
+      // ===========================================
+      // Google OAuth Callback (unauthenticated)
+      //
+      // This MUST be before the /api/ check because the callback
+      // doesn't use session auth — it verifies via HMAC state param.
+      // Google redirects here after user consents/denies.
+      // ===========================================
+      if (url.pathname === '/api/auth/google/callback' && request.method === 'GET') {
+        return handleGoogleCallback(request, env, ctx);
       }
 
       // ===========================================
