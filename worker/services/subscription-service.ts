@@ -5,8 +5,8 @@
  *
  * Subscription model:
  *
- *   trial   → 14-day full access, auto-downgrades to free on expiry
- *   free    → limited contacts, messages, braindumps, nudges per day
+ *   trial   → 14-day full access (premium features), auto-downgrades to free on expiry
+ *   free    → existing contacts frozen (no new adds), limited messages/nudges/braindumps per day
  *   premium → unlimited everything (Stripe-managed)
  *
  * Usage tracking:
@@ -22,6 +22,12 @@
  *   - Checked on every inbound SMS and API call
  *   - Auto-downgraded to free when expired (lazy — on next request)
  *   - Once downgraded, trial_ends_at is preserved for "you had a trial" logic
+ *
+ * Contact freeze on free tier:
+ *
+ *   Free tier users keep ALL their existing contacts but cannot add new ones.
+ *   This is a hard freeze, not a numeric cap. Users who built up 50 contacts
+ *   during their trial keep all 50 — they just can't add #51 until they upgrade.
  *
  * Usage:
  *
@@ -62,13 +68,13 @@ export type UsageMetric =
   | 'braindumps_processed';
 
 /**
- * Maps usage metrics to their free tier limit.
- * Keeps the lookup centralized so limit changes only happen in models.ts.
+ * Maps usage metrics to their free tier daily limit.
+ * contacts_added is handled separately — free tier is a hard freeze (no new contacts).
  */
 const METRIC_TO_LIMIT: Record<UsageMetric, number> = {
   messages_sent: FREE_TIER_LIMITS.max_messages_per_day,
   nudges_generated: FREE_TIER_LIMITS.max_nudges_per_day,
-  contacts_added: FREE_TIER_LIMITS.max_contacts, // treated as total, not daily — see checkContactLimit()
+  contacts_added: 0, // Free tier: no new contacts allowed (hard freeze)
   braindumps_processed: FREE_TIER_LIMITS.max_braindumps_per_day,
 };
 
@@ -112,7 +118,7 @@ export interface UsageLimitResult {
   permitted: boolean;
   /** Current count for this metric today */
   currentUsage: number;
-  /** The limit (Infinity for premium/trial) */
+  /** The limit (Infinity for premium/trial, 0 for contacts on free) */
   limit: number;
   /** Remaining before hitting the limit */
   remaining: number;
@@ -134,7 +140,7 @@ export interface DailyUsageSummary {
     messages: { used: number; max: number; remaining: number } | null;
     nudges: { used: number; max: number; remaining: number } | null;
     braindumps: { used: number; max: number; remaining: number } | null;
-    contacts: { used: number; max: number; remaining: number } | null;
+    contacts: { frozen: true; total: number } | null;
   } | null;
 }
 
@@ -250,11 +256,10 @@ export async function checkSubscriptionStatus(
  * Check whether a user can perform a metered operation.
  *
  * Premium and active trial users are always permitted (no limits).
- * Free tier users are checked against FREE_TIER_LIMITS.
+ * Free tier users are checked against daily limits for messages/nudges/braindumps.
  *
- * For contacts_added, this checks the total contact count in the DB,
- * not the daily counter — because the free limit on contacts is a
- * total cap, not a daily one.
+ * For contacts_added on free tier, this is a hard freeze — no new contacts
+ * can be added regardless of how many they currently have.
  *
  * @param db     - D1 database binding
  * @param userId - The user's ID
@@ -281,9 +286,15 @@ export async function checkUsageLimit(
     };
   }
 
-  // Contact limit is a total cap, not daily
+  // Free tier: contacts are frozen — no new adds allowed
   if (metric === 'contacts_added') {
-    return checkContactLimit(db, userId);
+    return {
+      permitted: false,
+      currentUsage: 0,
+      limit: 0,
+      remaining: 0,
+      reason: 'Adding new contacts is a premium feature. Upgrade to keep growing your network! Your existing contacts are still here — nothing\'s going anywhere.',
+    };
   }
 
   // Daily usage check for free tier
@@ -307,45 +318,6 @@ export async function checkUsageLimit(
   return {
     permitted: true,
     currentUsage: currentValue,
-    limit,
-    remaining,
-    reason: null,
-  };
-}
-
-/**
- * Check the total contact count against the free tier cap.
- * This is separate from daily usage because it's a lifetime limit.
- */
-async function checkContactLimit(
-  db: D1Database,
-  userId: string,
-): Promise<UsageLimitResult> {
-  const result = await db
-    .prepare(
-      `SELECT COUNT(*) as count FROM contacts
-       WHERE user_id = ? AND archived = 0`
-    )
-    .bind(userId)
-    .first<{ count: number }>();
-
-  const currentCount = result?.count ?? 0;
-  const limit = FREE_TIER_LIMITS.max_contacts;
-  const remaining = Math.max(0, limit - currentCount);
-
-  if (currentCount >= limit) {
-    return {
-      permitted: false,
-      currentUsage: currentCount,
-      limit,
-      remaining: 0,
-      reason: `You've reached the free plan limit of ${limit} contacts. Upgrade to premium for unlimited contacts, or archive some existing ones to make room.`,
-    };
-  }
-
-  return {
-    permitted: true,
-    currentUsage: currentCount,
     limit,
     remaining,
     reason: null,
@@ -426,7 +398,7 @@ export async function getDailyUsageSummary(
   };
 
   if (tier === 'free') {
-    // Also fetch total contact count for the contact limit
+    // Fetch total contact count for display (not for enforcement — it's a hard freeze)
     const contactResult = await db
       .prepare(
         `SELECT COUNT(*) as count FROM contacts
@@ -454,9 +426,8 @@ export async function getDailyUsageSummary(
         remaining: Math.max(0, FREE_TIER_LIMITS.max_braindumps_per_day - usage.braindumps_processed),
       },
       contacts: {
-        used: totalContacts,
-        max: FREE_TIER_LIMITS.max_contacts,
-        remaining: Math.max(0, FREE_TIER_LIMITS.max_contacts - totalContacts),
+        frozen: true,
+        total: totalContacts,
       },
     };
   }
@@ -531,6 +502,29 @@ export async function initializeTrial(
     .run();
 
   return { trialEndsAt };
+}
+
+/**
+ * Skip the trial and go directly to free tier.
+ * Called when a user explicitly opts out of the trial during onboarding.
+ *
+ * @param db     - D1 database binding
+ * @param userId - The user's ID
+ */
+export async function skipTrial(
+  db: D1Database,
+  userId: string,
+): Promise<void> {
+  await db
+    .prepare(
+      `UPDATE users
+       SET subscription_tier = 'free',
+           trial_ends_at = NULL,
+           updated_at = datetime('now')
+       WHERE id = ?`
+    )
+    .bind(userId)
+    .run();
 }
 
 /**
