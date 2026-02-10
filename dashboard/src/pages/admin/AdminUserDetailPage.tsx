@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useApi } from '../../hooks/useApi';
+import { API_URL } from '../../config';
 import {
   ArrowLeft,
   Mail,
@@ -23,10 +24,8 @@ import {
 } from 'lucide-react';
 
 // ===========================================================================
-// Config & Types
+// Types
 // ===========================================================================
-
-const API_URL = import.meta.env.VITE_API_URL || '';
 
 interface UserDetail {
   id: string;
@@ -126,34 +125,26 @@ function StageBadge({ stage }: { stage: string | null }) {
 }
 
 function HealthDot({ status }: { status: string }) {
-  const colors: Record<string, string> = {
-    green: 'bg-sage-400',
-    yellow: 'bg-golden-400',
-    red: 'bg-bethany-500',
-  };
+  const colors: Record<string, string> = { green: 'bg-sage-400', yellow: 'bg-golden-400', red: 'bg-bethany-500' };
   return <span className={`inline-block w-2 h-2 rounded-full ${colors[status] ?? 'bg-charcoal-300'}`} />;
 }
 
 function IntentLabel({ intent }: { intent: string }) {
   const labels: Record<string, string> = {
-    inner_circle: 'Inner Circle',
-    nurture: 'Nurture',
-    maintain: 'Maintain',
-    transactional: 'Transactional',
-    dormant: 'Dormant',
-    new: 'New',
+    inner_circle: 'Inner Circle', nurture: 'Nurture', maintain: 'Maintain',
+    transactional: 'Transactional', dormant: 'Dormant', new: 'New',
   };
   return <span>{labels[intent] ?? intent}</span>;
 }
 
 function MethodIcon({ method }: { method: string }) {
   const labels: Record<string, string> = {
-    text: '💬', call: '📞', in_person: '🤝', social: '📱', email: '📧', video: '🎥', other: '📌',
+    text: '\uD83D\uDCAC', call: '\uD83D\uDCDE', in_person: '\uD83E\uDD1D',
+    social: '\uD83D\uDCF1', email: '\uD83D\uDCE7', video: '\uD83C\uDFA5', other: '\uD83D\uDCCC',
   };
-  return <span title={method}>{labels[method] ?? '📌'}</span>;
+  return <span title={method}>{labels[method] ?? '\uD83D\uDCCC'}</span>;
 }
 
-/** Copy to clipboard */
 async function copyText(text: string) {
   try { await navigator.clipboard.writeText(text); } catch { /* noop */ }
 }
@@ -178,10 +169,7 @@ function InlineEdit({ label, value, onSave, type = 'text', options }: InlineEdit
   const handleSave = async () => {
     if (draft === value) { setEditing(false); return; }
     setSaving(true);
-    try {
-      await onSave(draft);
-      setEditing(false);
-    } catch { /* error handled by caller */ }
+    try { await onSave(draft); setEditing(false); } catch { /* error handled by caller */ }
     setSaving(false);
   };
 
@@ -192,7 +180,7 @@ function InlineEdit({ label, value, onSave, type = 'text', options }: InlineEdit
       <div className="flex items-center justify-between group">
         <div>
           <p className="text-xs text-charcoal-light">{label}</p>
-          <p className="text-sm text-charcoal font-medium">{value || '—'}</p>
+          <p className="text-sm text-charcoal font-medium">{value || '\u2014'}</p>
         </div>
         <button
           onClick={() => { setDraft(value); setEditing(true); }}
@@ -210,23 +198,13 @@ function InlineEdit({ label, value, onSave, type = 'text', options }: InlineEdit
       <p className="text-xs text-charcoal-light mb-1">{label}</p>
       <div className="flex items-center gap-1.5">
         {type === 'select' && options ? (
-          <select
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            className="input-field !py-1.5 text-sm flex-1"
-            autoFocus
-          >
-            {options.map((o) => (
-              <option key={o.value} value={o.value}>{o.label}</option>
-            ))}
+          <select value={draft} onChange={(e) => setDraft(e.target.value)} className="input-field !py-1.5 text-sm flex-1" autoFocus>
+            {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
           </select>
         ) : (
           <input
-            type="text"
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            className="input-field !py-1.5 text-sm flex-1"
-            autoFocus
+            type="text" value={draft} onChange={(e) => setDraft(e.target.value)}
+            className="input-field !py-1.5 text-sm flex-1" autoFocus
             onKeyDown={(e) => { if (e.key === 'Enter') handleSave(); if (e.key === 'Escape') handleCancel(); }}
           />
         )}
@@ -296,26 +274,14 @@ export default function AdminUserDetailPage() {
     id ? `${API_URL}/api/admin/users/${id}` : null,
   );
 
-  // Action states
   const [resendModal, setResendModal] = useState(false);
   const [deleteModal, setDeleteModal] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
 
-  // Clear flash messages after 4s
-  const flash = (msg: string) => {
-    setActionSuccess(msg);
-    setActionError(null);
-    setTimeout(() => setActionSuccess(null), 4000);
-  };
-  const flashError = (msg: string) => {
-    setActionError(msg);
-    setActionSuccess(null);
-    setTimeout(() => setActionError(null), 5000);
-  };
-
-  // ------ API Actions ------
+  const flash = (msg: string) => { setActionSuccess(msg); setActionError(null); setTimeout(() => setActionSuccess(null), 4000); };
+  const flashError = (msg: string) => { setActionError(msg); setActionSuccess(null); setTimeout(() => setActionError(null), 5000); };
 
   const handleUpdate = async (field: string, value: string) => {
     const body: Record<string, unknown> = {};
@@ -340,43 +306,24 @@ export default function AdminUserDetailPage() {
   const handleResendIntro = async () => {
     setActionLoading(true);
     try {
-      const res = await fetch(`${API_URL}/api/admin/users/${id}/resend-intro`, {
-        method: 'POST',
-        credentials: 'include',
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.error || 'Failed to resend');
-      }
+      const res = await fetch(`${API_URL}/api/admin/users/${id}/resend-intro`, { method: 'POST', credentials: 'include' });
+      if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.error || 'Failed to resend'); }
       flash('Bethany intro resent');
       setResendModal(false);
       refetch();
-    } catch (err) {
-      flashError(err instanceof Error ? err.message : 'Failed to resend intro');
-    }
+    } catch (err) { flashError(err instanceof Error ? err.message : 'Failed to resend intro'); }
     setActionLoading(false);
   };
 
   const handleDelete = async () => {
     setActionLoading(true);
     try {
-      const res = await fetch(`${API_URL}/api/admin/users/${id}`, {
-        method: 'DELETE',
-        credentials: 'include',
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.error || 'Delete failed');
-      }
+      const res = await fetch(`${API_URL}/api/admin/users/${id}`, { method: 'DELETE', credentials: 'include' });
+      if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.error || 'Delete failed'); }
       navigate('/admin/users', { replace: true });
-    } catch (err) {
-      flashError(err instanceof Error ? err.message : 'Failed to delete user');
-      setDeleteModal(false);
-    }
+    } catch (err) { flashError(err instanceof Error ? err.message : 'Failed to delete user'); setDeleteModal(false); }
     setActionLoading(false);
   };
-
-  // ------ Loading / Error ------
 
   if (isLoading && !data) {
     return (
@@ -405,17 +352,11 @@ export default function AdminUserDetailPage() {
 
   const { user, contacts, circles, recentInteractions, roles, subscription } = data;
 
-  // Derived stats
-  const intentCounts = contacts.reduce<Record<string, number>>((acc, c) => {
-    acc[c.intent] = (acc[c.intent] || 0) + 1; return acc;
-  }, {});
-  const healthCounts = contacts.reduce<Record<string, number>>((acc, c) => {
-    acc[c.health_status] = (acc[c.health_status] || 0) + 1; return acc;
-  }, {});
+  const intentCounts = contacts.reduce<Record<string, number>>((acc, c) => { acc[c.intent] = (acc[c.intent] || 0) + 1; return acc; }, {});
+  const healthCounts = contacts.reduce<Record<string, number>>((acc, c) => { acc[c.health_status] = (acc[c.health_status] || 0) + 1; return acc; }, {});
 
   return (
     <div className="space-y-5">
-      {/* Flash messages */}
       {actionSuccess && (
         <div className="bg-sage-100 text-sage-700 text-sm px-4 py-2.5 rounded-xl flex items-center gap-2 animate-fade-in">
           <Check className="w-4 h-4" /> {actionSuccess}
@@ -427,7 +368,6 @@ export default function AdminUserDetailPage() {
         </div>
       )}
 
-      {/* Back + Header */}
       <div>
         <Link to="/admin/users" className="text-sm text-charcoal-light hover:text-charcoal flex items-center gap-1 mb-3 transition-colors w-fit">
           <ArrowLeft className="w-4 h-4" /> Back to users
@@ -438,9 +378,7 @@ export default function AdminUserDetailPage() {
             <div className="space-y-2">
               <h1 className="font-display text-2xl text-charcoal">{user.name}</h1>
               <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-charcoal-light">
-                {user.email && (
-                  <span className="flex items-center gap-1.5"><Mail className="w-3.5 h-3.5" /> {user.email}</span>
-                )}
+                {user.email && <span className="flex items-center gap-1.5"><Mail className="w-3.5 h-3.5" /> {user.email}</span>}
                 <span className="flex items-center gap-1.5"><Phone className="w-3.5 h-3.5" /> {user.phone}</span>
                 <span className="flex items-center gap-1.5"><Calendar className="w-3.5 h-3.5" /> Joined {formatShortDate(user.created_at)}</span>
               </div>
@@ -454,8 +392,6 @@ export default function AdminUserDetailPage() {
                 ))}
               </div>
             </div>
-
-            {/* Actions */}
             <div className="flex items-center gap-2 shrink-0">
               <button onClick={() => setResendModal(true)} className="btn-ghost text-sm flex items-center gap-1.5" title="Resend Bethany intro SMS">
                 <Send className="w-4 h-4" /> Resend Intro
@@ -468,38 +404,19 @@ export default function AdminUserDetailPage() {
         </div>
       </div>
 
-      {/* Two-column grid */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-
-        {/* Account Info */}
         <div className="card space-y-4">
           <h2 className="font-display text-lg text-charcoal flex items-center gap-2">
             <Edit3 className="w-4 h-4 text-charcoal-light" /> Account Info
           </h2>
-
           <InlineEdit label="Name" value={user.name} onSave={(v) => handleUpdate('name', v)} />
-
-          <InlineEdit
-            label="Subscription Tier"
-            value={user.subscription_tier}
-            type="select"
-            options={TIER_OPTIONS.map((t) => ({ value: t, label: t.charAt(0).toUpperCase() + t.slice(1) }))}
-            onSave={(v) => handleUpdate('subscription_tier', v)}
-          />
-
-          <InlineEdit
-            label="Onboarding Stage"
-            value={user.onboarding_stage ?? ''}
-            type="select"
-            options={STAGE_OPTIONS}
-            onSave={(v) => handleUpdate('onboarding_stage', v)}
-          />
-
+          <InlineEdit label="Subscription Tier" value={user.subscription_tier} type="select" options={TIER_OPTIONS.map((t) => ({ value: t, label: t.charAt(0).toUpperCase() + t.slice(1) }))} onSave={(v) => handleUpdate('subscription_tier', v)} />
+          <InlineEdit label="Onboarding Stage" value={user.onboarding_stage ?? ''} type="select" options={STAGE_OPTIONS} onSave={(v) => handleUpdate('onboarding_stage', v)} />
           <div className="border-t border-cream-dark pt-3 space-y-2 text-sm">
             <div className="flex items-center justify-between">
               <span className="text-charcoal-light">User ID</span>
               <button onClick={() => copyText(user.id)} className="flex items-center gap-1 text-charcoal font-mono text-xs hover:text-bethany-500 transition-colors" title="Copy ID">
-                {user.id.slice(0, 8)}… <Copy className="w-3 h-3" />
+                {user.id.slice(0, 8)}\u2026 <Copy className="w-3 h-3" />
               </button>
             </div>
             {subscription.isTrialActive && subscription.trialEndsAt && (
@@ -511,7 +428,7 @@ export default function AdminUserDetailPage() {
             {user.stripe_customer_id && (
               <div className="flex items-center justify-between">
                 <span className="text-charcoal-light">Stripe</span>
-                <span className="text-charcoal font-mono text-xs">{user.stripe_customer_id.slice(0, 14)}…</span>
+                <span className="text-charcoal font-mono text-xs">{user.stripe_customer_id.slice(0, 14)}\u2026</span>
               </div>
             )}
             <div className="flex items-center justify-between">
@@ -529,14 +446,11 @@ export default function AdminUserDetailPage() {
           </div>
         </div>
 
-        {/* Contacts Summary */}
         <div className="card space-y-4">
           <h2 className="font-display text-lg text-charcoal flex items-center gap-2">
             <Users className="w-4 h-4 text-charcoal-light" /> Contacts
             <span className="text-sm font-body font-normal text-charcoal-light ml-auto">{contacts.length} total</span>
           </h2>
-
-          {/* By intent */}
           <div>
             <p className="text-xs text-charcoal-light uppercase tracking-wide mb-2">By Layer</p>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
@@ -548,8 +462,6 @@ export default function AdminUserDetailPage() {
               ))}
             </div>
           </div>
-
-          {/* By health */}
           <div>
             <p className="text-xs text-charcoal-light uppercase tracking-wide mb-2">By Health</p>
             <div className="flex items-center gap-4">
@@ -564,13 +476,11 @@ export default function AdminUserDetailPage() {
           </div>
         </div>
 
-        {/* Circles */}
         <div className="card space-y-3">
           <h2 className="font-display text-lg text-charcoal flex items-center gap-2">
             <Layers className="w-4 h-4 text-charcoal-light" /> Circles
             <span className="text-sm font-body font-normal text-charcoal-light ml-auto">{circles.length}</span>
           </h2>
-
           {circles.length > 0 ? (
             <div className="space-y-1.5">
               {circles.map((circle) => (
@@ -583,17 +493,13 @@ export default function AdminUserDetailPage() {
                 </div>
               ))}
             </div>
-          ) : (
-            <p className="text-sm text-charcoal-light">No circles created yet.</p>
-          )}
+          ) : <p className="text-sm text-charcoal-light">No circles created yet.</p>}
         </div>
 
-        {/* Recent Interactions */}
         <div className="card space-y-3">
           <h2 className="font-display text-lg text-charcoal flex items-center gap-2">
             <MessageSquare className="w-4 h-4 text-charcoal-light" /> Recent Interactions
           </h2>
-
           {recentInteractions.length > 0 ? (
             <div className="space-y-1.5">
               {recentInteractions.slice(0, 10).map((i) => (
@@ -604,20 +510,15 @@ export default function AdminUserDetailPage() {
                       <span className="font-medium text-charcoal">{i.contact_name}</span>
                       <span className="text-xs text-charcoal-light whitespace-nowrap ml-2">{formatShortDate(i.date)}</span>
                     </div>
-                    {i.summary && (
-                      <p className="text-charcoal-light text-xs truncate mt-0.5">{i.summary}</p>
-                    )}
+                    {i.summary && <p className="text-charcoal-light text-xs truncate mt-0.5">{i.summary}</p>}
                     <span className="text-xs text-charcoal-light/60">via {i.logged_via}</span>
                   </div>
                 </div>
               ))}
             </div>
-          ) : (
-            <p className="text-sm text-charcoal-light">No interactions logged yet.</p>
-          )}
+          ) : <p className="text-sm text-charcoal-light">No interactions logged yet.</p>}
         </div>
 
-        {/* Onboarding Debug */}
         <div className="card space-y-3 lg:col-span-2">
           <h2 className="font-display text-lg text-charcoal flex items-center gap-2">
             <Heart className="w-4 h-4 text-charcoal-light" /> Onboarding State
@@ -639,7 +540,7 @@ export default function AdminUserDetailPage() {
               <p className="text-xs text-charcoal-light">Quiet Hours</p>
               <p className="font-medium text-charcoal mt-0.5">
                 {user.quiet_hours_start && user.quiet_hours_end
-                  ? `${user.quiet_hours_start} – ${user.quiet_hours_end}`
+                  ? `${user.quiet_hours_start} \u2013 ${user.quiet_hours_end}`
                   : 'Not set'}
               </p>
             </div>
@@ -647,26 +548,8 @@ export default function AdminUserDetailPage() {
         </div>
       </div>
 
-      {/* Modals */}
-      <ConfirmModal
-        open={resendModal}
-        title="Resend Bethany Intro"
-        message={`This will send Bethany's intro SMS to ${user.phone} and reset their onboarding stage to "intro_sent". Continue?`}
-        confirmLabel="Send Intro"
-        loading={actionLoading}
-        onConfirm={handleResendIntro}
-        onCancel={() => setResendModal(false)}
-      />
-      <ConfirmModal
-        open={deleteModal}
-        title="Delete User"
-        message={`Permanently delete ${user.name} and all their data (${contacts.length} contacts, ${circles.length} circles, interactions, nudges)? This cannot be undone.`}
-        confirmLabel="Delete User"
-        confirmColor="danger"
-        loading={actionLoading}
-        onConfirm={handleDelete}
-        onCancel={() => setDeleteModal(false)}
-      />
+      <ConfirmModal open={resendModal} title="Resend Bethany Intro" message={`This will send Bethany's intro SMS to ${user.phone} and reset their onboarding stage to "intro_sent". Continue?`} confirmLabel="Send Intro" loading={actionLoading} onConfirm={handleResendIntro} onCancel={() => setResendModal(false)} />
+      <ConfirmModal open={deleteModal} title="Delete User" message={`Permanently delete ${user.name} and all their data (${contacts.length} contacts, ${circles.length} circles, interactions, nudges)? This cannot be undone.`} confirmLabel="Delete User" confirmColor="danger" loading={actionLoading} onConfirm={handleDelete} onCancel={() => setDeleteModal(false)} />
     </div>
   );
 }
