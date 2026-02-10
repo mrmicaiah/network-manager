@@ -26,7 +26,7 @@
  */
 
 import type { Env } from '../../shared/types';
-import { jsonResponse, errorResponse } from '../../shared/http';
+import { jsonResponse, errorResponse, getCorsHeaders } from '../../shared/http';
 import { handleAdminRoute } from './admin';
 import {
   requireAuth,
@@ -93,6 +93,26 @@ import type {
 } from '../../shared/models';
 
 // ===========================================================================
+// CORS Helper
+// ===========================================================================
+
+/**
+ * Apply correct CORS headers to any response based on the request origin.
+ *
+ * This ensures every API response gets the right Access-Control-Allow-Origin
+ * regardless of whether the individual handler passed the origin through.
+ * Called at the router level so no handler can accidentally omit CORS headers.
+ */
+function applyCorsHeaders(response: Response, origin: string | null): Response {
+  const corsHeaders = getCorsHeaders(origin);
+  const newResponse = new Response(response.body, response);
+  for (const [key, value] of Object.entries(corsHeaders)) {
+    newResponse.headers.set(key, value);
+  }
+  return newResponse;
+}
+
+// ===========================================================================
 // Main Router
 // ===========================================================================
 
@@ -104,25 +124,27 @@ export async function handleApiRoute(
   const url = new URL(request.url);
   const path = url.pathname;
   const method = request.method;
+  const origin = request.headers.get('Origin');
 
+  // Auth routes (handle their own CORS via auth-service, but we wrap anyway)
   if (path === '/api/auth/send-code' && method === 'POST') {
-    return handleSendCode(request, env);
+    return applyCorsHeaders(await handleSendCode(request, env), origin);
   }
   if (path === '/api/auth/verify' && method === 'POST') {
-    return handleVerifyCode(request, env);
+    return applyCorsHeaders(await handleVerifyCode(request, env), origin);
   }
   if (path === '/api/auth/logout' && method === 'POST') {
-    return handleLogout(request);
+    return applyCorsHeaders(await handleLogout(request), origin);
   }
   if (path === '/api/auth/me' && method === 'GET') {
-    return handleGetMe(request, env);
+    return applyCorsHeaders(await handleGetMe(request, env), origin);
   }
   if (path === '/api/stripe/webhook' && method === 'POST') {
     return handleStripeWebhook(request, env);
   }
 
   const auth = await requireAuth(request, env);
-  if (!auth.valid) return auth.response;
+  if (!auth.valid) return applyCorsHeaders(auth.response, origin);
 
   const { user } = auth.auth;
   const db = env.DB;
@@ -197,7 +219,6 @@ export async function handleApiRoute(
     } else if (path === '/api/subscription/portal' && method === 'POST') {
       response = await handlePortal(request, env, auth.auth);
     } else if (path.startsWith('/api/admin/')) {
-      const origin = request.headers.get('Origin');
       response = await handleAdminRoute(request, env, user.id, path, method, origin);
     } else {
       response = errorResponse('Not found', 404);
@@ -206,6 +227,11 @@ export async function handleApiRoute(
     console.error(`[api] ${method} ${path} error:`, err);
     response = errorResponse('Internal server error', 500);
   }
+
+  // Apply correct CORS headers to ALL responses at the router level.
+  // This guarantees the right Access-Control-Allow-Origin regardless of
+  // whether individual handlers passed the origin through.
+  response = applyCorsHeaders(response, origin);
 
   if (auth.refreshedCookie) {
     response = withRefreshedSession(response, auth.refreshedCookie);
@@ -518,12 +544,12 @@ async function handleExport(url: URL, db: D1Database, userId: string): Promise<R
   if (archived === 'true') filters.archived = true;
 
   const csv = await exportContacts(db, userId, filters);
+  // Note: CORS headers are applied at the router level via applyCorsHeaders()
   return new Response(csv, {
     status: 200,
     headers: {
       'Content-Type': 'text/csv; charset=utf-8',
       'Content-Disposition': `attachment; filename="bethany-contacts-${new Date().toISOString().slice(0, 10)}.csv"`,
-      'Access-Control-Allow-Origin': '*',
     },
   });
 }
