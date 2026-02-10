@@ -1,4 +1,4 @@
-// Admin Overview — v3 with centralized config
+// Admin Overview — v4 fix lucide icon
 import { useNavigate, Link } from 'react-router-dom';
 import { useApi } from '../../hooks/useApi';
 import { API_URL } from '../../config';
@@ -8,7 +8,7 @@ import {
   CreditCard,
   Clock,
   TrendingUp,
-  BookUser,
+  Contact,
   AlertTriangle,
   ArrowRight,
   Activity,
@@ -58,13 +58,11 @@ interface UsersResponse {
 // Helpers
 // ===========================================================================
 
-/** Mask phone for display: +1234567890 → +1••••••7890 */
 function maskPhone(phone: string): string {
   if (phone.length < 8) return phone;
-  return phone.slice(0, 2) + '••••••' + phone.slice(-4);
+  return phone.slice(0, 2) + '\u2022\u2022\u2022\u2022\u2022\u2022' + phone.slice(-4);
 }
 
-/** Format relative time */
 function timeAgo(dateStr: string): string {
   const now = Date.now();
   const then = new Date(dateStr).getTime();
@@ -80,7 +78,6 @@ function timeAgo(dateStr: string): string {
   return new Date(dateStr).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
-/** Tier badge */
 function TierBadge({ tier }: { tier: string }) {
   const styles: Record<string, string> = {
     premium: 'badge-primary',
@@ -90,14 +87,12 @@ function TierBadge({ tier }: { tier: string }) {
   return <span className={styles[tier] ?? 'badge-neutral'}>{tier}</span>;
 }
 
-/** Onboarding stage display */
 function StageBadge({ stage }: { stage: string | null }) {
   if (!stage) return <span className="badge-success">Complete</span>;
   const label = stage.replace(/_/g, ' ');
   return <span className="badge-warning">{label}</span>;
 }
 
-/** Count users stuck in onboarding (any stage that isn't null/complete) */
 function countOnboardingStuck(stages: Record<string, number>): number {
   let stuck = 0;
   for (const [stage, count] of Object.entries(stages)) {
@@ -167,7 +162,6 @@ export default function AdminOverviewPage() {
 
   const isLoading = statsLoading || usersLoading;
 
-  // Loading state
   if (isLoading && !stats && !recentUsers) {
     return (
       <div className="flex items-center justify-center py-20">
@@ -179,7 +173,6 @@ export default function AdminOverviewPage() {
     );
   }
 
-  // Error state
   if (statsError || usersError) {
     return (
       <div className="card text-center py-12">
@@ -198,7 +191,6 @@ export default function AdminOverviewPage() {
 
   return (
     <div className="space-y-6">
-      {/* Page header */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="font-display text-2xl text-charcoal">Overview</h1>
@@ -214,7 +206,6 @@ export default function AdminOverviewPage() {
         </button>
       </div>
 
-      {/* Row 1: User counts */}
       <div>
         <h2 className="text-sm font-medium text-charcoal-light uppercase tracking-wide mb-3">Users</h2>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 lg:gap-4">
@@ -247,7 +238,6 @@ export default function AdminOverviewPage() {
         </div>
       </div>
 
-      {/* Row 2: Growth */}
       <div>
         <h2 className="text-sm font-medium text-charcoal-light uppercase tracking-wide mb-3">Growth</h2>
         <div className="grid grid-cols-3 gap-3 lg:gap-4">
@@ -269,19 +259,18 @@ export default function AdminOverviewPage() {
         </div>
       </div>
 
-      {/* Row 3: Engagement */}
       <div>
         <h2 className="text-sm font-medium text-charcoal-light uppercase tracking-wide mb-3">Engagement</h2>
         <div className="grid grid-cols-2 lg:grid-cols-3 gap-3 lg:gap-4">
           <StatCard
             label="Total Contacts"
             value={stats?.totalContacts?.toLocaleString() ?? 0}
-            icon={<BookUser className="w-5 h-5 text-charcoal-light" />}
+            icon={<Contact className="w-5 h-5 text-charcoal-light" />}
           />
           <StatCard
             label="Avg per User"
             value={stats?.avgContactsPerUser ?? 0}
-            icon={<BookUser className="w-5 h-5 text-charcoal-light" />}
+            icon={<Contact className="w-5 h-5 text-charcoal-light" />}
           />
           <StatCard
             label="Stuck in Onboarding"
@@ -293,7 +282,6 @@ export default function AdminOverviewPage() {
         </div>
       </div>
 
-      {/* Recent Signups */}
       <div className="card">
         <div className="flex items-center justify-between mb-4">
           <h2 className="font-display text-lg text-charcoal">Recent Signups</h2>
@@ -334,7 +322,7 @@ export default function AdminOverviewPage() {
                       <span className="font-medium text-charcoal">{user.name}</span>
                     </td>
                     <td className="py-3 px-4 sm:px-6 text-charcoal-light hidden md:table-cell truncate max-w-[200px]">
-                      {user.email || '—'}
+                      {user.email || '\u2014'}
                     </td>
                     <td className="py-3 px-4 sm:px-6 text-charcoal-light hidden lg:table-cell font-mono text-xs">
                       {maskPhone(user.phone)}
@@ -358,7 +346,6 @@ export default function AdminOverviewPage() {
         )}
       </div>
 
-      {/* Quick Actions */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 lg:gap-4">
         <Link
           to="/admin/users"
