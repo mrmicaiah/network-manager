@@ -15,6 +15,7 @@
  *   /api/import/*        — CSV import and bulk import flow
  *   /api/user/*          — Profile read/update, notification preferences, account deletion
  *   /api/subscription/*  — Tier info, checkout, portal
+ *   /api/auth/google/*   — Google Contacts OAuth (connect, disconnect, status, sync)
  *   /api/dashboard/*     — Dashboard tabs and dartboard data
  *   /api/admin/*         — Admin dashboard (permission-guarded)
  *   /api/stripe/webhook  — Stripe webhook handler (no auth)
@@ -218,6 +219,21 @@ export async function handleApiRoute(
       response = await handleCheckout(request, env, auth.auth);
     } else if (path === '/api/subscription/portal' && method === 'POST') {
       response = await handlePortal(request, env, auth.auth);
+    // ---------------------------------------------------------------
+    // Google Contacts (authenticated routes — callback is in index.ts)
+    // ---------------------------------------------------------------
+    } else if (path === '/api/auth/google/connect' && method === 'POST') {
+      const { handleGoogleConnect } = await import('./google-auth');
+      response = await handleGoogleConnect({ user, env, origin });
+    } else if (path === '/api/auth/google/disconnect' && method === 'POST') {
+      const { handleGoogleDisconnect } = await import('./google-auth');
+      response = await handleGoogleDisconnect({ user, env, origin });
+    } else if (path === '/api/auth/google/status' && method === 'GET') {
+      const { handleGoogleStatus } = await import('./google-auth');
+      response = await handleGoogleStatus({ user, env, origin });
+    } else if (path === '/api/auth/google/sync' && method === 'POST') {
+      const { handleGoogleSync } = await import('./google-auth');
+      response = await handleGoogleSync({ user, env, origin });
     } else if (path.startsWith('/api/admin/')) {
       response = await handleAdminRoute(request, env, user.id, path, method, origin);
     } else {
@@ -643,6 +659,7 @@ async function handleDeleteUser(request: Request, env: Env, db: D1Database, auth
     await db.prepare('DELETE FROM circles WHERE user_id = ?').bind(user.id).run();
     await db.prepare('DELETE FROM verification_codes WHERE phone = ?').bind(user.phone).run();
     await db.prepare('DELETE FROM sessions WHERE user_id = ?').bind(user.id).run();
+    await db.prepare('DELETE FROM oauth_tokens WHERE user_id = ?').bind(user.id).run();
     await db.prepare('DELETE FROM users WHERE id = ?').bind(user.id).run();
 
     const response = jsonResponse({ data: { deleted: true, message: 'Account and all data permanently deleted', stripeSubscriptionsCanceled: stripeCanceled } });
