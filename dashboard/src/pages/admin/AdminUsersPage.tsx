@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
+import { API_URL } from '../../config';
 import {
   Search,
   ChevronUp,
@@ -16,10 +17,8 @@ import {
 } from 'lucide-react';
 
 // ===========================================================================
-// Config & Types
+// Types
 // ===========================================================================
-
-const API_URL = import.meta.env.VITE_API_URL || '';
 
 interface UserRow {
   id: string;
@@ -69,9 +68,7 @@ const PAGE_SIZE_OPTIONS = [10, 25, 50];
 // Helpers
 // ===========================================================================
 
-/** Mask phone: +15551234567 → (555) ***-4567 */
 function maskPhone(phone: string): string {
-  // Strip to digits
   const digits = phone.replace(/\D/g, '');
   if (digits.length === 11 && digits[0] === '1') {
     const area = digits.slice(1, 4);
@@ -83,14 +80,12 @@ function maskPhone(phone: string): string {
     const last4 = digits.slice(-4);
     return `(${area}) ***-${last4}`;
   }
-  // Fallback: show first 3 and last 4
   if (phone.length > 7) {
-    return phone.slice(0, 3) + '••••' + phone.slice(-4);
+    return phone.slice(0, 3) + '\u2022\u2022\u2022\u2022' + phone.slice(-4);
   }
   return phone;
 }
 
-/** Format date for table */
 function formatDate(dateStr: string): string {
   const d = new Date(dateStr);
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
@@ -106,16 +101,12 @@ function TierBadge({ tier }: { tier: string }) {
 }
 
 function StageBadge({ stage }: { stage: string | null }) {
-  if (!stage) return <span className="badge-neutral">—</span>;
+  if (!stage) return <span className="badge-neutral">\u2014</span>;
   if (stage === 'complete') return <span className="badge-success">Complete</span>;
   if (stage === 'ready') return <span className="badge-success">Ready</span>;
   const label = stage.replace(/_/g, ' ');
   return <span className="badge-warning">{label}</span>;
 }
-
-// ===========================================================================
-// Debounce hook
-// ===========================================================================
 
 function useDebounce<T>(value: T, delayMs: number): T {
   const [debounced, setDebounced] = useState(value);
@@ -169,21 +160,13 @@ function SortHeader({ field, label, currentSort, currentDir, onSort, className =
 function SkeletonRow() {
   return (
     <tr className="border-b border-cream-dark/60 animate-pulse">
-      {/* Checkbox */}
       <td className="py-3.5 px-4 sm:px-5"><div className="w-4 h-4 bg-cream-dark rounded" /></td>
-      {/* Name */}
       <td className="py-3.5 px-4 sm:px-5"><div className="w-28 h-4 bg-cream-dark rounded" /></td>
-      {/* Email */}
       <td className="py-3.5 px-4 sm:px-5 hidden md:table-cell"><div className="w-36 h-4 bg-cream-dark rounded" /></td>
-      {/* Phone */}
       <td className="py-3.5 px-4 sm:px-5 hidden lg:table-cell"><div className="w-28 h-4 bg-cream-dark rounded" /></td>
-      {/* Tier */}
       <td className="py-3.5 px-4 sm:px-5"><div className="w-14 h-5 bg-cream-dark rounded-full" /></td>
-      {/* Stage */}
       <td className="py-3.5 px-4 sm:px-5 hidden sm:table-cell"><div className="w-16 h-5 bg-cream-dark rounded-full" /></td>
-      {/* Contacts */}
       <td className="py-3.5 px-4 sm:px-5 hidden lg:table-cell"><div className="w-8 h-4 bg-cream-dark rounded" /></td>
-      {/* Created */}
       <td className="py-3.5 px-4 sm:px-5 text-right"><div className="w-20 h-4 bg-cream-dark rounded ml-auto" /></td>
     </tr>
   );
@@ -197,7 +180,6 @@ export default function AdminUsersPage() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
 
-  // State from URL params (persist across navigation)
   const [searchInput, setSearchInput] = useState(searchParams.get('search') ?? '');
   const [tier, setTier] = useState(searchParams.get('tier') ?? '');
   const [stage, setStage] = useState(searchParams.get('stage') ?? '');
@@ -207,14 +189,12 @@ export default function AdminUsersPage() {
   const [sortDir, setSortDir] = useState<SortDir>((searchParams.get('sort_dir') as SortDir) || 'desc');
   const [showFilters, setShowFilters] = useState(!!tier || !!stage);
 
-  // Data
   const [data, setData] = useState<UsersResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const debouncedSearch = useDebounce(searchInput, 300);
 
-  // Build URL and fetch
   const fetchUsers = useCallback(async () => {
     setIsLoading(true);
     setError(null);
@@ -226,9 +206,7 @@ export default function AdminUsersPage() {
     params.set('sort_dir', sortDir);
     if (debouncedSearch) params.set('search', debouncedSearch);
     if (tier) params.set('tier', tier);
-    if (stage) {
-      params.set('onboarding_stage', stage);
-    }
+    if (stage) params.set('onboarding_stage', stage);
 
     try {
       const res = await fetch(`${API_URL}/api/admin/users?${params.toString()}`, {
@@ -247,11 +225,8 @@ export default function AdminUsersPage() {
     }
   }, [page, limit, sortBy, sortDir, debouncedSearch, tier, stage]);
 
-  useEffect(() => {
-    fetchUsers();
-  }, [fetchUsers]);
+  useEffect(() => { fetchUsers(); }, [fetchUsers]);
 
-  // Sync state to URL
   useEffect(() => {
     const params = new URLSearchParams();
     if (debouncedSearch) params.set('search', debouncedSearch);
@@ -264,12 +239,8 @@ export default function AdminUsersPage() {
     setSearchParams(params, { replace: true });
   }, [debouncedSearch, tier, stage, page, limit, sortBy, sortDir, setSearchParams]);
 
-  // Reset page when filters change
-  useEffect(() => {
-    setPage(1);
-  }, [debouncedSearch, tier, stage, limit]);
+  useEffect(() => { setPage(1); }, [debouncedSearch, tier, stage, limit]);
 
-  // Sorting handler
   const handleSort = (field: SortField) => {
     if (sortBy === field) {
       setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
@@ -279,13 +250,7 @@ export default function AdminUsersPage() {
     }
   };
 
-  // Clear all filters
-  const clearFilters = () => {
-    setSearchInput('');
-    setTier('');
-    setStage('');
-    setPage(1);
-  };
+  const clearFilters = () => { setSearchInput(''); setTier(''); setStage(''); setPage(1); };
 
   const hasActiveFilters = !!debouncedSearch || !!tier || !!stage;
   const totalPages = data?.pagination?.totalPages ?? 1;
@@ -295,7 +260,6 @@ export default function AdminUsersPage() {
 
   return (
     <div className="space-y-4">
-      {/* Page header */}
       <div>
         <h1 className="font-display text-2xl text-charcoal">Users</h1>
         <p className="text-charcoal-light text-sm mt-1">
@@ -303,10 +267,8 @@ export default function AdminUsersPage() {
         </p>
       </div>
 
-      {/* Search + Filter bar */}
       <div className="card !p-3 sm:!p-4 space-y-3">
         <div className="flex items-center gap-2">
-          {/* Search */}
           <div className="relative flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-charcoal-light" />
             <input
@@ -325,86 +287,50 @@ export default function AdminUsersPage() {
               </button>
             )}
           </div>
-
-          {/* Filter toggle */}
           <button
             onClick={() => setShowFilters(!showFilters)}
-            className={`btn-ghost text-sm flex items-center gap-1.5 shrink-0 ${
-              hasActiveFilters ? 'text-bethany-500' : ''
-            }`}
+            className={`btn-ghost text-sm flex items-center gap-1.5 shrink-0 ${hasActiveFilters ? 'text-bethany-500' : ''}`}
           >
             <Filter className="w-4 h-4" />
             <span className="hidden sm:inline">Filters</span>
-            {hasActiveFilters && (
-              <span className="w-1.5 h-1.5 rounded-full bg-bethany-500" />
-            )}
+            {hasActiveFilters && <span className="w-1.5 h-1.5 rounded-full bg-bethany-500" />}
           </button>
         </div>
 
-        {/* Filter dropdowns */}
         {showFilters && (
           <div className="flex flex-wrap items-center gap-2 pt-1">
-            <select
-              value={tier}
-              onChange={(e) => setTier(e.target.value)}
-              className="input-field !w-auto !py-2 text-sm !pr-8"
-            >
-              {TIER_OPTIONS.map((opt) => (
-                <option key={opt.value} value={opt.value}>{opt.label}</option>
-              ))}
+            <select value={tier} onChange={(e) => setTier(e.target.value)} className="input-field !w-auto !py-2 text-sm !pr-8">
+              {TIER_OPTIONS.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
             </select>
-
-            <select
-              value={stage}
-              onChange={(e) => setStage(e.target.value)}
-              className="input-field !w-auto !py-2 text-sm !pr-8"
-            >
-              {STAGE_OPTIONS.map((opt) => (
-                <option key={opt.value} value={opt.value}>{opt.label}</option>
-              ))}
+            <select value={stage} onChange={(e) => setStage(e.target.value)} className="input-field !w-auto !py-2 text-sm !pr-8">
+              {STAGE_OPTIONS.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
             </select>
-
             {hasActiveFilters && (
-              <button
-                onClick={clearFilters}
-                className="text-xs text-charcoal-light hover:text-charcoal flex items-center gap-1 transition-colors"
-              >
-                <X className="w-3 h-3" />
-                Clear all
+              <button onClick={clearFilters} className="text-xs text-charcoal-light hover:text-charcoal flex items-center gap-1 transition-colors">
+                <X className="w-3 h-3" /> Clear all
               </button>
             )}
           </div>
         )}
       </div>
 
-      {/* Error state */}
       {error && (
         <div className="card text-center py-8">
           <AlertTriangle className="w-7 h-7 text-golden-400 mx-auto mb-2" />
           <p className="text-charcoal font-medium mb-1">Failed to load users</p>
           <p className="text-charcoal-light text-sm mb-3">{error}</p>
-          <button onClick={fetchUsers} className="btn-secondary text-sm">
-            <RefreshCw className="w-4 h-4" />
-            Retry
-          </button>
+          <button onClick={fetchUsers} className="btn-secondary text-sm"><RefreshCw className="w-4 h-4" /> Retry</button>
         </div>
       )}
 
-      {/* Table */}
       {!error && (
         <div className="card !p-0 overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-cream-dark bg-cream/50">
-                  {/* Checkbox placeholder */}
                   <th className="w-10 py-2.5 px-4 sm:px-5">
-                    <input
-                      type="checkbox"
-                      disabled
-                      className="opacity-30"
-                      title="Bulk actions coming soon"
-                    />
+                    <input type="checkbox" disabled className="opacity-30" title="Bulk actions coming soon" />
                   </th>
                   <SortHeader field="name" label="Name" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} />
                   <SortHeader field="email" label="Email" currentSort={sortBy} currentDir={sortDir} onSort={handleSort} className="hidden md:table-cell" />
@@ -417,10 +343,7 @@ export default function AdminUsersPage() {
               </thead>
               <tbody>
                 {isLoading && !data ? (
-                  // Skeleton loading
-                  Array.from({ length: limit > 10 ? 10 : limit }).map((_, i) => (
-                    <SkeletonRow key={i} />
-                  ))
+                  Array.from({ length: limit > 10 ? 10 : limit }).map((_, i) => <SkeletonRow key={i} />)
                 ) : data?.users && data.users.length > 0 ? (
                   data.users.map((user) => (
                     <tr
@@ -429,38 +352,18 @@ export default function AdminUsersPage() {
                       className="border-b border-cream-dark/60 last:border-0 hover:bg-cream-dark/40 cursor-pointer transition-colors"
                     >
                       <td className="py-3 px-4 sm:px-5" onClick={(e) => e.stopPropagation()}>
-                        <input
-                          type="checkbox"
-                          disabled
-                          className="opacity-30"
-                          title="Bulk actions coming soon"
-                        />
+                        <input type="checkbox" disabled className="opacity-30" title="Bulk actions coming soon" />
                       </td>
-                      <td className="py-3 px-4 sm:px-5">
-                        <span className="font-medium text-charcoal">{user.name}</span>
-                      </td>
-                      <td className="py-3 px-4 sm:px-5 text-charcoal-light hidden md:table-cell truncate max-w-[200px]">
-                        {user.email || '—'}
-                      </td>
-                      <td className="py-3 px-4 sm:px-5 text-charcoal-light hidden lg:table-cell font-mono text-xs">
-                        {maskPhone(user.phone)}
-                      </td>
-                      <td className="py-3 px-4 sm:px-5">
-                        <TierBadge tier={user.subscription_tier} />
-                      </td>
-                      <td className="py-3 px-4 sm:px-5 hidden sm:table-cell">
-                        <StageBadge stage={user.onboarding_stage} />
-                      </td>
-                      <td className="py-3 px-4 sm:px-5 text-charcoal-light hidden lg:table-cell">
-                        {user.contact_count}
-                      </td>
-                      <td className="py-3 px-4 sm:px-5 text-right text-charcoal-light whitespace-nowrap">
-                        {formatDate(user.created_at)}
-                      </td>
+                      <td className="py-3 px-4 sm:px-5"><span className="font-medium text-charcoal">{user.name}</span></td>
+                      <td className="py-3 px-4 sm:px-5 text-charcoal-light hidden md:table-cell truncate max-w-[200px]">{user.email || '\u2014'}</td>
+                      <td className="py-3 px-4 sm:px-5 text-charcoal-light hidden lg:table-cell font-mono text-xs">{maskPhone(user.phone)}</td>
+                      <td className="py-3 px-4 sm:px-5"><TierBadge tier={user.subscription_tier} /></td>
+                      <td className="py-3 px-4 sm:px-5 hidden sm:table-cell"><StageBadge stage={user.onboarding_stage} /></td>
+                      <td className="py-3 px-4 sm:px-5 text-charcoal-light hidden lg:table-cell">{user.contact_count}</td>
+                      <td className="py-3 px-4 sm:px-5 text-right text-charcoal-light whitespace-nowrap">{formatDate(user.created_at)}</td>
                     </tr>
                   ))
                 ) : (
-                  // Empty state
                   <tr>
                     <td colSpan={8} className="py-16 text-center">
                       <Users className="w-8 h-8 text-charcoal-light/40 mx-auto mb-3" />
@@ -468,12 +371,7 @@ export default function AdminUsersPage() {
                         {hasActiveFilters ? 'No users match your filters' : 'No users yet'}
                       </p>
                       {hasActiveFilters && (
-                        <button
-                          onClick={clearFilters}
-                          className="text-sm text-bethany-500 hover:text-bethany-600 transition-colors"
-                        >
-                          Clear filters
-                        </button>
+                        <button onClick={clearFilters} className="text-sm text-bethany-500 hover:text-bethany-600 transition-colors">Clear filters</button>
                       )}
                     </td>
                   </tr>
@@ -482,67 +380,22 @@ export default function AdminUsersPage() {
             </table>
           </div>
 
-          {/* Pagination footer */}
           {data && total > 0 && (
             <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-4 sm:px-5 py-3 border-t border-cream-dark bg-cream/30">
-              {/* Left: showing X-Y of Z */}
               <div className="text-sm text-charcoal-light">
-                Showing <span className="font-medium text-charcoal">{startItem}–{endItem}</span> of{' '}
+                Showing <span className="font-medium text-charcoal">{startItem}\u2013{endItem}</span> of{' '}
                 <span className="font-medium text-charcoal">{total}</span> users
               </div>
-
-              {/* Right: page controls */}
               <div className="flex items-center gap-2">
-                {/* Page size */}
-                <select
-                  value={limit}
-                  onChange={(e) => setLimit(Number(e.target.value))}
-                  className="input-field !w-auto !py-1.5 !px-2 text-xs !min-h-0"
-                >
-                  {PAGE_SIZE_OPTIONS.map((size) => (
-                    <option key={size} value={size}>{size} / page</option>
-                  ))}
+                <select value={limit} onChange={(e) => setLimit(Number(e.target.value))} className="input-field !w-auto !py-1.5 !px-2 text-xs !min-h-0">
+                  {PAGE_SIZE_OPTIONS.map((size) => <option key={size} value={size}>{size} / page</option>)}
                 </select>
-
-                {/* Navigation buttons */}
                 <div className="flex items-center gap-0.5">
-                  <button
-                    onClick={() => setPage(1)}
-                    disabled={page <= 1}
-                    className="icon-btn !min-w-[36px] !min-h-[36px] disabled:opacity-30"
-                    title="First page"
-                  >
-                    <ChevronsLeft className="w-4 h-4" />
-                  </button>
-                  <button
-                    onClick={() => setPage((p) => Math.max(1, p - 1))}
-                    disabled={page <= 1}
-                    className="icon-btn !min-w-[36px] !min-h-[36px] disabled:opacity-30"
-                    title="Previous page"
-                  >
-                    <ChevronLeft className="w-4 h-4" />
-                  </button>
-
-                  <span className="text-sm text-charcoal px-2 font-medium">
-                    {page} <span className="text-charcoal-light font-normal">/ {totalPages}</span>
-                  </span>
-
-                  <button
-                    onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                    disabled={page >= totalPages}
-                    className="icon-btn !min-w-[36px] !min-h-[36px] disabled:opacity-30"
-                    title="Next page"
-                  >
-                    <ChevronRight className="w-4 h-4" />
-                  </button>
-                  <button
-                    onClick={() => setPage(totalPages)}
-                    disabled={page >= totalPages}
-                    className="icon-btn !min-w-[36px] !min-h-[36px] disabled:opacity-30"
-                    title="Last page"
-                  >
-                    <ChevronsRight className="w-4 h-4" />
-                  </button>
+                  <button onClick={() => setPage(1)} disabled={page <= 1} className="icon-btn !min-w-[36px] !min-h-[36px] disabled:opacity-30" title="First page"><ChevronsLeft className="w-4 h-4" /></button>
+                  <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1} className="icon-btn !min-w-[36px] !min-h-[36px] disabled:opacity-30" title="Previous page"><ChevronLeft className="w-4 h-4" /></button>
+                  <span className="text-sm text-charcoal px-2 font-medium">{page} <span className="text-charcoal-light font-normal">/ {totalPages}</span></span>
+                  <button onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={page >= totalPages} className="icon-btn !min-w-[36px] !min-h-[36px] disabled:opacity-30" title="Next page"><ChevronRight className="w-4 h-4" /></button>
+                  <button onClick={() => setPage(totalPages)} disabled={page >= totalPages} className="icon-btn !min-w-[36px] !min-h-[36px] disabled:opacity-30" title="Last page"><ChevronsRight className="w-4 h-4" /></button>
                 </div>
               </div>
             </div>

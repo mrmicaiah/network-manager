@@ -6,13 +6,7 @@ import {
   useCallback,
   type ReactNode,
 } from 'react';
-
-// ===========================================================================
-// Configuration
-// ===========================================================================
-
-/** API base URL — falls back to same-origin if not set */
-const API_URL = import.meta.env.VITE_API_URL || '';
+import { API_URL } from '../config';
 
 // ===========================================================================
 // Types
