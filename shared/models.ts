@@ -182,22 +182,17 @@ export type CircleType =
   | 'custom';    // User-created
 
 /**
- * Onboarding conversation stages — post-signup SMS flow state machine.
+ * Onboarding conversation stages — post-signup SMS flow.
  *
- * Discovery-first flow: web signup → intro → discovery → path recommendation → action
+ * Simplified to 3 natural stages: intro → conversation → ready.
+ * The AI drives transitions naturally instead of a rigid state machine.
  *
- * @see worker/services/onboarding-service.ts for the full state machine
- * @see docs/bethany-onboarding-kb.md for the knowledge base
+ * @see worker/services/onboarding-service.ts for the conversation flow
  */
 export type OnboardingStage =
-  | 'intro_sent'           // Bethany's welcome message delivered after web signup
-  | 'user_replies'         // User responded, initial warmth
-  | 'network_discovery'    // Ask about network size, where contacts live
-  | 'path_recommendation'  // Recommend import vs manual based on answers
-  | 'guided_action'        // Walk through import OR collect names
-  | 'learn_circles'        // Identifying key relationships and groups
-  | 'explain_features'     // Showing what Bethany can do
-  | 'ready';               // Onboarding complete, user is active
+  | 'intro_sent'     // Bethany's welcome message delivered after web signup
+  | 'conversation'   // Getting to know the user, helping them set up
+  | 'ready';         // Onboarding complete, user is active
 
 /**
  * Trial reminder stages — lifecycle messaging touchpoints.
@@ -252,94 +247,18 @@ export interface UserRow {
   subscription_tier: SubscriptionTier;
   trial_ends_at: string | null;  // ISO timestamp — null if never trialed
   stripe_customer_id: string | null;
-  /**
-   * Optional gender — set during onboarding or in settings.
-   * When set, enables gender-aware nudge defaults via GenderModifiers
-   * in intent-config.ts. null = not set (no modifiers applied).
-   *
-   * This is opt-in and functions as a suggestion layer, not a hard
-   * rule. Users can override any cadence or nudge style preference
-   * regardless of this setting.
-   *
-   * @see UserGender type
-   * @see GENDER_MODIFIERS in shared/intent-config.ts
-   */
   gender: UserGender;
   /** Onboarding stage — tracks where the user is in the SMS onboarding flow. null = complete. */
   onboarding_stage: OnboardingStage | null;
-  /**
-   * Last time we offered to help sort unsorted contacts.
-   * Used to avoid spamming users with weekly sorting check-ins.
-   * null = never offered.
-   *
-   * @see worker/services/sorting-checkin-service.ts
-   */
   last_sorting_offer: string | null;
-  /**
-   * Last time we sent a trial lifecycle message.
-   * Used to track timing of trial messaging.
-   * null = no trial message sent yet.
-   *
-   * @see worker/services/trial-messaging-service.ts
-   */
   last_trial_reminder: string | null;
-  /**
-   * Which trial reminder stage was last sent.
-   * Ensures we don't re-send the same message.
-   * null = no trial message sent yet.
-   *
-   * @see TrialReminderStage type
-   * @see worker/services/trial-messaging-service.ts
-   */
   trial_reminder_stage: TrialReminderStage | null;
-  /**
-   * Default circle tab for dashboard.
-   * The tab that loads first when user opens the dashboard.
-   * null = first tab by sort order.
-   *
-   * @see docs/dartboard-system-design.md
-   */
   default_circle_id: string | null;
-  /**
-   * Circle tab order for dashboard.
-   * JSON array of circle IDs in display order.
-   * null = use sort_order from circles table.
-   *
-   * @see docs/dartboard-system-design.md
-   */
   circle_tab_order: string | null;
-  /**
-   * User's timezone in IANA format (e.g., 'America/New_York').
-   * Used for scheduling nudges at appropriate local times.
-   *
-   * @see worker/cron/scheduled.ts for timezone-aware delivery
-   */
   timezone: string;
-  /**
-   * Preferred hour for nudge delivery (0-23 in user's local timezone).
-   * Default: 8 (8am)
-   */
   preferred_nudge_hour: number;
-  /**
-   * How often the user wants proactive nudges.
-   * - 'daily': Daily nudges (premium default)
-   * - 'weekly': Weekly digest only (free default)
-   * - 'as_needed': Only when relationships are red/critical
-   *
-   * @see NudgeFrequency type
-   */
   nudge_frequency: NudgeFrequency;
-  /**
-   * Start of quiet hours window (HH:MM format, e.g., '22:00').
-   * No SMS will be sent during quiet hours.
-   * Both quiet_hours_start and quiet_hours_end must be set, or both null.
-   */
   quiet_hours_start: string | null;
-  /**
-   * End of quiet hours window (HH:MM format, e.g., '08:00').
-   * No SMS will be sent during quiet hours.
-   * Both quiet_hours_start and quiet_hours_end must be set, or both null.
-   */
   quiet_hours_end: string | null;
   created_at: string;            // ISO timestamp
   updated_at: string;            // ISO timestamp
@@ -359,24 +278,7 @@ export interface ContactRow {
   custom_cadence_days: number | null; // Override intent default, null = use intent default
   last_contact_date: string | null;   // ISO timestamp
   health_status: HealthStatus;        // Computed, stored for query performance
-  /**
-   * Whether this contact is family (kin) or not.
-   * Kin contacts get relaxed cadence thresholds via kinDecayModifier
-   * in intent-config.ts. Defaults to 'non_kin'.
-   *
-   * Auto-set to 'kin' when a contact is added to the "Family" circle,
-   * but can be manually overridden (some close friends are like family,
-   * and some family members are estranged).
-   */
   contact_kind: ContactKind;
-  /**
-   * The contact's preferred communication method.
-   * When set, this method scores higher points in the dartboard system.
-   * null = no preference (all methods score equally except in_person).
-   *
-   * @see shared/point-config.ts for point values
-   * @see docs/dartboard-system-design.md
-   */
   preferred_method: InteractionMethod | null;
   notes: string | null;               // Free-form notes about this person
   source: string | null;              // How they were added: 'onboarding', 'braindump', 'manual', 'import'
@@ -420,33 +322,20 @@ export interface InteractionRow {
   method: InteractionMethod;
   summary: string | null;        // Brief description or AI-generated summary
   logged_via: string;            // 'sms', 'dashboard', 'auto' — how it was recorded
-  /**
-   * Which circles this interaction counts toward for scoring.
-   * JSON array of circle IDs. null = counts for all circles the contact belongs to.
-   *
-   * Used for the "two hats" problem: calling your brother about his kids
-   * might count for Family but not Work, even though he's in both.
-   *
-   * @see docs/dartboard-system-design.md
-   */
   circle_context: string | null;
   created_at: string;
 }
 
 /**
  * CircleScore — cached relationship score for a contact in a circle.
- * Recalculated on interaction log and daily cron.
- *
- * @see worker/services/score-service.ts
- * @see docs/dartboard-system-design.md
  */
 export interface CircleScoreRow {
   contact_id: string;            // FK → contacts.id (composite PK)
   circle_id: string;             // FK → circles.id (composite PK)
-  points_earned: number;         // Points earned in current cadence window
-  score: number;                 // 0.0 to 1.0+ (ratio of earned/required)
-  status: ScoreStatus;           // 'thriving', 'healthy', 'slipping', 'drifting'
-  calculated_at: string;         // ISO timestamp — when last recalculated
+  points_earned: number;
+  score: number;                 // 0.0 to 1.0+
+  status: ScoreStatus;
+  calculated_at: string;
 }
 
 /**
@@ -490,7 +379,7 @@ export interface NudgeRow {
   user_id: string;               // FK → users.id
   contact_id: string;            // FK → contacts.id
   message: string;               // Nudge text from Bethany
-  reason: string;                // Why this nudge was generated (health status, cadence, etc.)
+  reason: string;                // Why this nudge was generated
   status: NudgeStatus;
   scheduled_for: string;         // ISO timestamp — when to deliver
   delivered_at: string | null;
@@ -534,13 +423,6 @@ export interface UserWithSubscription extends UserRow {
 
 /**
  * /api/auth/me response shape — returned by handleGetMe.
- * Includes RBAC roles and permissions so the frontend can
- * show/hide admin UI and guard admin routes client-side.
- *
- * Regular users get empty arrays for both fields.
- *
- * @see worker/services/auth-service.ts handleGetMe()
- * @see worker/services/permission-service.ts
  */
 export interface MeResponse {
   user: {
@@ -549,32 +431,22 @@ export interface MeResponse {
     phone: string;
     email: string | null;
     subscriptionTier: SubscriptionTier;
-    /** Role names assigned to this user (e.g., ['user', 'admin']) */
     roles: string[];
-    /** Permission strings the user has (e.g., ['users:read', 'stats:read']) */
     permissions: string[];
   };
 }
 
 /**
  * Onboarding conversation state — stored in Durable Object.
- * Not persisted in D1; lives only during the onboarding flow.
+ * Simplified to match the new 3-stage onboarding flow.
  *
  * @see worker/services/onboarding-service.ts for OnboardingConversationState
- *      which extends this with additional fields for the DO.
  */
 export interface OnboardingState {
   phone: string;
-  userId: string;                // Known from web signup
+  userId: string;
   stage: OnboardingStage;
-  name: string;                  // Known from web signup (not null anymore)
-  circlesDiscussed: string[];
-  peopleDiscussed: Array<{
-    name: string;
-    relationship?: string;
-    circle?: string;
-    notes?: string;
-  }>;
+  name: string;
   messages: Array<{
     role: 'user' | 'bethany';
     content: string;
@@ -611,37 +483,28 @@ export interface BraindumpExtraction {
 // Service Method Params
 // ===========================================================================
 
-/**
- * Filters for listing contacts.
- */
 export interface ContactListFilters {
   circle_id?: string;
   intent?: IntentType;
   health_status?: HealthStatus;
   contact_kind?: ContactKind;
   archived?: boolean;
-  search?: string;           // Name search (LIKE query)
+  search?: string;
 }
 
-/**
- * Input for creating a new contact.
- */
 export interface CreateContactInput {
   name: string;
   phone?: string;
   email?: string;
-  intent?: IntentType;       // Defaults to 'new'
+  intent?: IntentType;
   custom_cadence_days?: number;
-  contact_kind?: ContactKind; // Defaults to 'non_kin'
+  contact_kind?: ContactKind;
   preferred_method?: InteractionMethod;
   notes?: string;
-  circle_ids?: string[];     // Circles to link on creation
+  circle_ids?: string[];
   source?: string;
 }
 
-/**
- * Input for updating an existing contact.
- */
 export interface UpdateContactInput {
   name?: string;
   phone?: string;
@@ -652,24 +515,18 @@ export interface UpdateContactInput {
   preferred_method?: InteractionMethod | null;
   notes?: string;
   archived?: boolean;
-  circle_ids?: string[];     // Replaces all circle links if provided
+  circle_ids?: string[];
 }
 
-/**
- * Input for logging an interaction.
- */
 export interface LogInteractionInput {
   contact_id: string;
-  date?: string;             // Defaults to now
+  date?: string;
   method: InteractionMethod;
   summary?: string;
-  logged_via?: string;       // Defaults to 'dashboard'
-  circle_context?: string[]; // Which circles this counts for (null = all)
+  logged_via?: string;
+  circle_context?: string[];
 }
 
-/**
- * Input for updating user notification preferences.
- */
 export interface UpdateNotificationPreferencesInput {
   timezone?: string;
   preferred_nudge_hour?: number;
@@ -703,32 +560,16 @@ export const DEFAULT_CIRCLES = [
 // RBAC — Role-Based Access Control Types
 // ===========================================================================
 
-/**
- * Role name — predefined system roles.
- * Custom roles may be added but these are the foundation.
- */
 export type RoleName = 'user' | 'admin' | 'superadmin';
 
-/**
- * Permission resource — the entity a permission applies to.
- * Matches the seeded resources in migrations/0011_rbac_seed_data.sql.
- * Extensible as new admin features are added.
- */
 export type PermissionResource =
-  | 'users'      // User accounts and profiles
-  | 'stats'      // Admin dashboard statistics
-  | 'activity'   // Audit log and activity feed
-  | 'roles';     // Role and permission management
+  | 'users'
+  | 'stats'
+  | 'activity'
+  | 'roles';
 
-/**
- * Permission action — what can be done to a resource.
- */
 export type PermissionAction = 'read' | 'write' | 'delete' | 'manage';
 
-/**
- * Audit log action — standardized action identifiers for the audit trail.
- * Uses resource.verb pattern for consistency.
- */
 export type AuditAction =
   | 'user.update'
   | 'user.delete'
@@ -749,88 +590,60 @@ export type AuditAction =
 // RBAC — D1 Row Types
 // ===========================================================================
 
-/**
- * Role — a named set of permissions that can be assigned to users.
- * Default roles (user, admin, superadmin) are seeded on first deploy.
- */
 export interface RoleRow {
-  id: string;                    // UUID primary key
-  name: string;                  // Unique role name (e.g., 'admin')
-  description: string | null;    // Human-readable description
-  created_at: string;            // ISO timestamp
-  updated_at: string;            // ISO timestamp
+  id: string;
+  name: string;
+  description: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
-/**
- * Permission — a granular capability using resource:action pattern.
- * e.g., name='users:read', resource='users', action='read'
- */
 export interface PermissionRow {
-  id: string;                    // UUID primary key
-  name: string;                  // Unique, format: 'resource:action'
-  resource: string;              // Target resource (e.g., 'users')
-  action: string;                // Allowed action (e.g., 'read')
-  description: string | null;    // Human-readable description
-  created_at: string;            // ISO timestamp
+  id: string;
+  name: string;
+  resource: string;
+  action: string;
+  description: string | null;
+  created_at: string;
 }
 
-/**
- * RolePermission — junction mapping permissions to roles.
- */
 export interface RolePermissionRow {
-  role_id: string;               // FK → roles.id
-  permission_id: string;         // FK → permissions.id
-  granted_at: string;            // ISO timestamp
+  role_id: string;
+  permission_id: string;
+  granted_at: string;
 }
 
-/**
- * UserRole — junction assigning roles to users.
- * granted_by tracks who performed the assignment (null for system-assigned).
- */
 export interface UserRoleRow {
-  user_id: string;               // FK → users.id
-  role_id: string;               // FK → roles.id
-  granted_at: string;            // ISO timestamp
-  granted_by: string | null;     // FK → users.id, null for system-assigned
+  user_id: string;
+  role_id: string;
+  granted_at: string;
+  granted_by: string | null;
 }
 
-/**
- * AdminAuditLog — immutable record of an admin action.
- * details is a JSON blob capturing before/after state for accountability.
- */
 export interface AdminAuditLogRow {
-  id: string;                    // UUID primary key
-  user_id: string;               // FK → users.id — who performed the action
-  action: string;                // e.g., 'user.update', 'role.assign'
-  resource_type: string | null;  // e.g., 'user', 'contact'
-  resource_id: string | null;    // ID of the affected resource
-  details: string | null;        // JSON blob — what changed
+  id: string;
+  user_id: string;
+  action: string;
+  resource_type: string | null;
+  resource_id: string | null;
+  details: string | null;
   ip_address: string | null;
   user_agent: string | null;
-  created_at: string;            // ISO timestamp
+  created_at: string;
 }
 
 // ===========================================================================
 // RBAC — Application-Level Types
 // ===========================================================================
 
-/**
- * Role with its permissions resolved — used by auth middleware.
- */
 export interface RoleWithPermissions extends RoleRow {
   permissions: PermissionRow[];
 }
 
-/**
- * User with roles resolved — used by admin dashboard and auth checks.
- */
 export interface UserWithRoles extends UserRow {
   roles: RoleRow[];
 }
 
-/**
- * Input for creating an audit log entry.
- */
 export interface CreateAuditLogInput {
   user_id: string;
   action: AuditAction | string;
@@ -841,45 +654,28 @@ export interface CreateAuditLogInput {
   user_agent?: string;
 }
 
-/**
- * Default roles seeded on first deploy.
- * @see migrations/0011_rbac_seed_data.sql
- */
 export const DEFAULT_ROLES: Array<{ name: RoleName; description: string }> = [
   { name: 'user', description: 'Standard user — no admin access' },
   { name: 'admin', description: 'Admin — can view dashboard, manage users, view stats' },
   { name: 'superadmin', description: 'Super admin — full access including role management' },
 ];
 
-/**
- * Default permissions seeded on first deploy.
- * Matches migrations/0011_rbac_seed_data.sql exactly.
- * Uses resource:action naming convention.
- */
 export const DEFAULT_PERMISSIONS: Array<{
   name: string;
   resource: PermissionResource;
   action: PermissionAction;
   description: string;
 }> = [
-  // Users
   { name: 'users:read', resource: 'users', action: 'read', description: 'View user list and details' },
   { name: 'users:write', resource: 'users', action: 'write', description: 'Edit user details, change subscription tier' },
   { name: 'users:delete', resource: 'users', action: 'delete', description: 'Delete user accounts' },
-  // Stats
   { name: 'stats:read', resource: 'stats', action: 'read', description: 'View admin dashboard stats' },
-  // Activity
   { name: 'activity:read', resource: 'activity', action: 'read', description: 'View audit log and activity feed' },
-  // Roles
   { name: 'roles:read', resource: 'roles', action: 'read', description: 'View roles and permissions' },
   { name: 'roles:write', resource: 'roles', action: 'write', description: 'Assign and remove roles from users' },
   { name: 'roles:manage', resource: 'roles', action: 'manage', description: 'Create, edit, and delete roles and permissions' },
 ];
 
-/**
- * Deterministic role IDs — match migrations/0011_rbac_seed_data.sql.
- * Use these constants instead of querying for role IDs by name.
- */
 export const ROLE_IDS = {
   user: 'role-user-00000000-0000-0000-0001',
   admin: 'role-admin-0000000-0000-0000-0002',
