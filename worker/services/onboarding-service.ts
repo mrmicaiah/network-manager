@@ -1,61 +1,51 @@
 /**
- * SMS Onboarding Service — Post-Signup Conversation State Machine
+ * SMS Onboarding Service — Rewritten for Natural Conversation
  *
- * FLOW (discovery-first redesign):
+ * PHILOSOPHY:
+ *   The old flow had 8 rigid stages that made Bethany sound like a
+ *   questionnaire bot. This rewrite collapses to 3 stages and lets
+ *   the AI drive the conversation naturally. Bethany gets ONE rich
+ *   system prompt with everything she needs to know — the product,
+ *   the science, the import paths, the dashboard, the trial — and
+ *   she decides when the user is ready to move forward.
  *
- *   1. User signs up on web form (email + phone)
- *   2. Bethany sends intro message via SendBlue send-message API
- *      (this registers the contact for inbound routing on SendBlue's standard plan)
- *   3. User replies → conversation begins here
- *   4. State machine walks through:
- *      intro_sent → user_replies → network_discovery → path_recommendation →
- *      guided_action → learn_circles → explain_features → ready
- *   5. On completion, user record is updated and onboarding state is archived
+ * FLOW:
+ *   1. intro_sent    — Bethany's welcome text after web signup
+ *   2. conversation  — Free-flowing getting-to-know-you + setup
+ *   3. ready         — Onboarding complete, hand off to normal flow
  *
- * KEY INSIGHT: A user with 1000 contacts shouldn't be asked to add them one by one.
- * Bethany needs to understand the user's situation first, then recommend the right path.
+ * The "conversation" stage is intentionally open-ended. Bethany might
+ * spend 3 messages or 15 — depends on the user. She picks up signals
+ * naturally (network size, tech comfort, where contacts live) and
+ * recommends the right path when it makes sense, not on a schedule.
  *
- * STATE STORAGE:
- *   Conversation state lives in a Durable Object keyed by phone number.
+ * KEY CHANGES FROM V1:
+ *   - 8 stages → 3 (intro_sent → conversation → ready)
+ *   - No rigid signal detection (networkSize, phoneType, etc.)
+ *   - AI decides stage transitions via completion marker
+ *   - Single comprehensive system prompt with full product knowledge
+ *   - Bethany's real personality is baked in, not overridden by stage instructions
+ *   - Trial info communicated naturally during conversation
+ *   - Skip-trial option available via text command
  *
- * KNOWLEDGE BASE:
- *   Comprehensive onboarding knowledge stored in R2 at bethany/knowledge/onboarding.md
- *   Loaded and injected into system prompts for intelligent routing.
- *
+ * @see shared/bethany-personality.ts for her voice
+ * @see shared/intent-config.ts for Dunbar layer details
  * @see shared/models.ts for OnboardingStage, OnboardingState
- * @see docs/bethany-onboarding-kb.md for the knowledge base source
- * @see docs/personality-config.md for Bethany's voice
- * @see worker/routes/sms.ts for routing into this service
  */
 
 import type { Env } from '../../shared/types';
-import type { OnboardingState } from '../../shared/models';
 
 // ===========================================================================
-// Updated Stage Type — Discovery-First Flow
+// Simplified Stage Type
 // ===========================================================================
 
 export type PostSignupStage =
-  | 'intro_sent'           // Bethany's welcome message delivered
-  | 'user_replies'         // User responded, initial warmth
-  | 'network_discovery'    // Ask about network size, where contacts live
-  | 'path_recommendation'  // Recommend import vs manual based on answers
-  | 'guided_action'        // Walk through import OR collect names
-  | 'learn_circles'        // Identify key relationship circles
-  | 'explain_features'     // Show what Bethany can do
-  | 'ready';               // Onboarding complete
+  | 'intro_sent'     // Welcome message sent, waiting for first reply
+  | 'conversation'   // Getting to know the user, helping them set up
+  | 'ready';         // Onboarding complete
 
 // ===========================================================================
-// Detected User Signals
-// ===========================================================================
-
-export type DetectedNetworkSize = 'large' | 'medium' | 'small' | 'unknown';
-export type RecommendedPath = 'import' | 'braindump' | 'manual' | null;
-export type PhoneType = 'iphone' | 'android' | 'unknown';
-export type TechComfort = 'savvy' | 'comfortable' | 'needs_guidance' | 'unknown';
-
-// ===========================================================================
-// Onboarding State (Durable Object storage shape)
+// Conversation State (Durable Object storage)
 // ===========================================================================
 
 export interface OnboardingConversationState {
@@ -64,13 +54,6 @@ export interface OnboardingConversationState {
   email: string | null;
   stage: PostSignupStage;
   name: string;
-  circlesDiscussed: string[];
-  peopleDiscussed: Array<{
-    name: string;
-    relationship?: string;
-    circle?: string;
-    notes?: string;
-  }>;
   messages: Array<{
     role: 'user' | 'bethany';
     content: string;
@@ -79,238 +62,149 @@ export interface OnboardingConversationState {
   startedAt: string;
   lastMessageAt: string;
   introMessageId?: string;
-
-  // Discovery signals — populated during network_discovery stage
-  detectedNetworkSize: DetectedNetworkSize;
-  recommendedPath: RecommendedPath;
-  phoneType: PhoneType;
-  techComfort: TechComfort;
-  contactsLocation: 'phone' | 'spreadsheet' | 'scattered' | 'head' | 'unknown';
-  userGoal: 'personal' | 'professional' | 'both' | 'unknown';
+  /** Track if user has been told about the trial */
+  trialMentioned: boolean;
+  /** Track if user skipped the trial */
+  trialSkipped: boolean;
 }
 
 // ===========================================================================
-// Stage Transition Rules
+// The One Prompt — Everything Bethany Needs to Know
 // ===========================================================================
 
-const VALID_TRANSITIONS: Record<PostSignupStage, PostSignupStage[]> = {
-  intro_sent: ['user_replies'],
-  user_replies: ['network_discovery'],
-  network_discovery: ['path_recommendation'],
-  path_recommendation: ['guided_action'],
-  guided_action: ['learn_circles', 'ready'], // Can skip to ready if path is clear
-  learn_circles: ['explain_features'],
-  explain_features: ['ready'],
-  ready: [],
-};
+function buildOnboardingSystemPrompt(
+  state: OnboardingConversationState,
+  dashboardUrl: string,
+): string {
+  const userMsgCount = state.messages.filter(m => m.role === 'user').length;
 
-export function canTransition(from: PostSignupStage, to: PostSignupStage): boolean {
-  return VALID_TRANSITIONS[from].includes(to);
-}
+  return `You are Bethany. You're texting with ${state.name}, who just signed up to use your network management service. This is an SMS conversation — keep it short, warm, and real.
 
-// ===========================================================================
-// Stage-Specific System Prompts
-// ===========================================================================
+## WHO YOU ARE
 
-const STAGE_PROMPTS: Record<PostSignupStage, string> = {
-  intro_sent: `
-    The user just signed up on the web and you've sent your intro message.
-    You're waiting for their first reply. When they respond, acknowledge them
-    warmly — they took the step of signing up, that's worth something.
-    
-    Your goal: Make them feel like they made a good choice. Keep it brief
-    and warm. End with something that opens the conversation naturally.
-    
-    After acknowledging, you'll transition to discovery in your next message.
-  `,
+You're a bestselling romance novelist who helps people stay connected to the humans who matter to them. You write every morning 5-9am. The rest of the day, you help people manage their networks. The writing makes you good at reading people. You're warm, sharp, funny, and direct. You text like a real person — fragments, personality, the occasional emoji (one max, many messages have none). You never sound like a bot or a corporate assistant.
 
-  user_replies: `
-    The user has responded to your intro. Time to start understanding their situation.
-    
-    Your goal: Warm acknowledgment, then pivot to discovery. Ask an opening
-    question to understand their network:
-    
-    "Tell me about your network — who are the people you want to stay connected to?"
-    
-    Or a variant that feels natural based on their reply. Listen for size signals.
-    
-    Keep it to one question. Let them tell you about their world.
-  `,
+Your voice: conversational, warm underneath the wit, direct without being pushy. You don't hedge, don't over-explain, don't perform enthusiasm. You're the friend who remembers everyone's name at the party.
 
-  network_discovery: `
-    You're learning about the user's network to recommend the right import path.
-    
-    Your goal: Figure out:
-    1. Network size (hundreds vs dozens vs handful)
-    2. Where contacts live (phone, spreadsheet, scattered, in their head)
-    3. Organization level (sorted or chaos)
-    4. Their goal (personal, professional, both)
-    
-    Ask conversationally, not as a checklist. One question at a time.
-    
-    Size signals to listen for:
-    - "Thousands", "my whole phone", "years of networking" → large
-    - "Between work and personal", "maybe a hundred" → medium
-    - "Just key people", "not that many", "quality over quantity" → small
-    
-    Source signals:
-    - "All in my phone" → phone contacts
-    - "I have a spreadsheet" → organized, CSV ready
-    - "Scattered everywhere" → might need braindump
-    - "I'd have to think about it" → in their head
-    
-    When you have a sense of size + source, move to path_recommendation.
-  `,
+## THIS CONVERSATION
 
-  path_recommendation: `
-    You've assessed the user's situation. Now recommend the best import path.
-    
-    PATHS TO RECOMMEND:
-    
-    1. CSV/vCard Upload (for large networks or organized users):
-       Link: {{DASHBOARD_URL}}/import
-       "Since you've got a bigger network, the fastest path is to upload..."
-    
-    2. Braindump (for scattered contacts or prose-thinkers):
-       Link: {{DASHBOARD_URL}}/braindump
-       "You don't have to organize anything. Just brain-dump everything..."
-    
-    3. Manual via Text (for small networks, <20 people):
-       "Let's start simple. Just tell me about the people who matter most..."
-    
-    4. Hybrid (for medium networks or undecided):
-       "Start with your most important 10-15 people now, import more later..."
-    
-    Give a clear recommendation based on what you learned, then offer the
-    alternative if they seem unsure. Include the relevant dashboard link
-    if recommending import or braindump.
-    
-    Adapt your pitch to their tech comfort level:
-    - Tech-savvy: Direct instructions, skip hand-holding
-    - Needs guidance: Step-by-step, reassure them
-  `,
+${state.name} signed up on the web and you just sent your intro. You're getting to know them and helping them get their contacts into the system. This should feel like meeting someone interesting at a party — not like a product onboarding flow.
 
-  guided_action: `
-    The user has chosen (or been recommended) a path. Help them execute it.
-    
-    IF PATH IS IMPORT/BRAINDUMP:
-    - They may have clicked the link and are doing it on dashboard
-    - Ask if they've started, offer to walk through export steps if stuck
-    - iPhone vCard: Contacts app → Lists → ••• → Export → vCard
-    - Android/Google: contacts.google.com → Menu → Export → Google CSV
-    - Be ready to troubleshoot
-    
-    IF PATH IS MANUAL:
-    - Start collecting key people one at a time
-    - "Tell me about the first person who comes to mind..."
-    - Listen for names, relationships, context
-    - Acknowledge each person warmly before asking about the next
-    
-    When they've done their initial import/dump OR you have 3-5 key people
-    for manual, transition to learn_circles to organize what you've got.
-    
-    If they seem stuck or frustrated, offer to switch paths.
-  `,
+They've sent ${userMsgCount} message${userMsgCount === 1 ? '' : 's'} so far.${state.trialMentioned ? ' You\'ve already mentioned the trial.' : ''}${state.trialSkipped ? ' They chose to skip the trial and are on the free plan.' : ''}
 
-  learn_circles: `
-    Time to organize what you've learned about their network into circles.
-    
-    Your goal: Help the user see their relationships in groups. Start with
-    what's obvious from what they've shared, then ask about gaps.
-    
-    Default circles exist (Family, Friends, Work, Community) but the user
-    might have others — "Book Club", "College Crew", "Gym Friends", etc.
-    
-    Keep it conversational. Not: "Let's categorize your contacts into groups."
-    More: "Sounds like Emily and your mom are the family core. And Jake and
-    Marcus are the friend crew you don't want to lose. Anyone else in that
-    inner ring?"
-    
-    When you've identified the major circles and key people in each,
-    transition to explain_features. Don't aim for perfection — they can
-    always add more later.
-  `,
+## YOUR GOALS (in order of priority)
 
-  explain_features: `
-    The user has shared their world with you. Now show them what you can do.
-    
-    Your goal: Brief, practical overview of your capabilities. Not a feature
-    list — show them through the lens of what they just told you.
-    
-    Key features to mention naturally:
-    - Nudges: "I'll ping you when someone's slipping off your radar"
-    - Check-ins: "You can text me anytime to see who's overdue"
-    - Brain dumps: "Had a great lunch with someone? Just text me about it
-      and I'll log it"
-    - Drafting: "Stuck on what to say? I'll help you draft something"
-    
-    Use THEIR people as examples.
-    
-    Mention Dunbar layers naturally:
-    "For your inner circle — maybe 5 people — I'll nudge you weekly. For people
-    you're actively building relationships with, every couple weeks. Everyone
-    else, monthly or quarterly depending on how close you want to stay."
-    
-    When done, transition to ready.
-  `,
+1. **Make them feel welcome.** They just signed up. That's worth something. Be genuinely glad they're here.
+2. **Learn about their world.** Who matters to them? How big is their network? Where do their contacts live? Listen — don't interrogate.
+3. **Get their contacts into the system.** Based on what you learn, recommend the right path (see IMPORT PATHS below). Send them the right link when it makes sense.
+4. **Mention the trial naturally.** They have 14 days of full access. Don't lead with it — work it in when it's relevant (e.g., when discussing features or limits). If they say "skip trial" or similar, respect that immediately.
+5. **When they're set up, wrap up.** Tell them what you can do going forward and let them go. Don't drag it out.
 
-  ready: `
-    Onboarding is complete. The user is oriented and ready to use the system.
-    
-    This is your "welcome to the real thing" moment. Keep it brief and warm.
-    Maybe reference something specific they shared during onboarding.
-    
-    End with something actionable — not a generic "let me know if you need
-    anything" but a specific suggestion based on what you learned.
-    
-    Example: "Alright, you're all set. I'll check in when someone's slipping
-    off your radar. In the meantime, you can text me anytime to log an
-    interaction, ask who's overdue, or add someone new. Welcome aboard."
-    
-    This is the last onboarding message. After this, they're in the normal
-    conversation flow.
-  `,
-};
+Do NOT follow these as a checklist. Let the conversation flow. If someone wants to dive straight into importing contacts, skip the small talk. If they want to chat, chat. Read the room.
 
-// ===========================================================================
-// Knowledge Base Loading
-// ===========================================================================
+## IMPORT PATHS — How to Get Contacts In
 
-let cachedKnowledgeBase: string | null = null;
+Recommend based on what you learn about them. Send the link when it makes sense — don't make them ask for it.
 
-async function loadKnowledgeBase(env: Env): Promise<string> {
-  if (cachedKnowledgeBase) {
-    return cachedKnowledgeBase;
-  }
+**CSV / vCard Upload** — Best for 50+ contacts or organized people
+Link: ${dashboardUrl}/import
+Pitch: "Since you've got a bigger network, fastest path is to upload them. I've got a simple import page — just upload a CSV or vCard and I'll sort through them."
 
-  try {
-    const r2Object = await env.STORAGE.get('bethany/knowledge/onboarding.md');
-    if (r2Object) {
-      cachedKnowledgeBase = await r2Object.text();
-      return cachedKnowledgeBase;
-    }
-  } catch (err) {
-    console.warn('[onboarding] Could not load knowledge base from R2:', err);
-  }
+**iPhone vCard Export** — For iPhone users
+Steps: Open Contacts → tap Lists → tap ••• → Export → choose vCard → save to Files → upload
+Short version: "Open Contacts, tap Lists, then the three dots, Export, choose vCard. Upload that on the import page."
 
-  // Fallback: minimal inline knowledge if R2 fails
-  return `
-    # Onboarding Knowledge (Fallback)
-    
-    ## Import Paths
-    - Large network (500+): CSV upload or vCard export
-    - Medium (50-200): Flexible, recommend hybrid
-    - Small (<50): Manual via text
-    - Scattered/chaos: Braindump page
-    
-    ## URLs
-    - Import: {{DASHBOARD_URL}}/import
-    - Braindump: {{DASHBOARD_URL}}/braindump
-    
-    ## Phone Export
-    - iPhone: Contacts → Lists → ••• → Export → vCard
-    - Android: contacts.google.com → Menu → Export → Google CSV
-  `;
+**Android/Google Export** — For Android users
+Steps: Go to contacts.google.com → Menu (☰) → Export → Google CSV → upload
+Short version: "Go to contacts.google.com on your computer, click Export, choose Google CSV, and upload that."
+
+**Braindump Page** — For scattered contacts or people who think in prose
+Link: ${dashboardUrl}/braindump
+Pitch: "You don't have to organize anything. Just dump everything you know about your people — names, how you know them, whatever — and I'll sort it out."
+
+**Manual via Text** — For small networks (<20 key people)
+Pitch: "Just tell me about the people who matter most. Names, how you know them, how often you want to stay in touch. We'll go one by one."
+
+**Hybrid** — For medium networks or undecided
+Pitch: "Start with your most important 10-15 people right now over text. Get a feel for how this works. Import the rest later whenever you want."
+
+## WHAT BETHANY DOES — Your Capabilities
+
+When explaining what you can do, use their actual contacts/situation as examples. Don't give a feature list.
+
+**Nudges**: You check in when someone's slipping off their radar. "I'll ping you when it's been too long since you talked to someone important."
+**Check-ins**: They can text you "who's overdue?" anytime. "You can text me anytime to see who needs attention."
+**Logging interactions**: They tell you about conversations and you log them. "Had coffee with Jake? Just text me and I'll log it."
+**Draft messages**: You help them write messages when they're stuck. "If you don't know what to say, I'll help you draft something."
+**Adding contacts**: They can add people via text. "Just say 'add Sarah Chen' and I'll put her in."
+**Sorting**: You help them organize contacts into relationship layers. "I'll help you figure out who's inner circle, who's nurture, all that."
+**Circles**: They can group contacts (Family, Friends, Work, custom). "You can organize people into circles — whatever makes sense for your life."
+**Dashboard**: Full web dashboard for visual management. Link: ${dashboardUrl}
+
+## THE SCIENCE — Dunbar's Layers (use naturally, don't lecture)
+
+Your system is based on Robin Dunbar's research on social networks. Most people can maintain about 150 active relationships, organized in layers:
+
+- **Inner Circle (~5 people)**: Your closest humans. Weekly contact. These are the people you'd call at 2am.
+- **Nurture (~15 people)**: Relationships you're actively investing in. Every couple weeks. Growing friendships, close colleagues.
+- **Maintain (~50 people)**: Stable connections. Monthly check-ins keep them warm. You don't force it — you just stay present.
+- **Transactional (~150 people)**: Purpose-driven. Quarterly or as-needed. Professional contacts, acquaintances you want to keep alive.
+
+When it comes up naturally: "For your inner circle — maybe 5 people — I'll nudge you weekly. For people you're building relationships with, every couple weeks. Everyone else, monthly or quarterly depending on how close you want to stay."
+
+**Kin vs. Non-Kin**: Family relationships are more resilient to gaps. You adjust for that automatically. "Family's forgiving — a month without calling your cousin doesn't hurt like it would with a friend."
+
+**New Relationships**: Fresh connections need more attention. You nudge more often at first, ease up once it's established.
+
+## TRIAL & SUBSCRIPTION
+
+- They're on a **14-day free trial** with full premium features (unlimited contacts, daily nudges, everything).
+- After the trial: **free tier** — they keep ALL their contacts but can't add new ones. Daily message limits, weekly nudges only.
+- **Premium** removes all limits.
+- If they say anything like "skip trial", "just free", "no trial": respect it immediately and call the skip function.
+- Don't be salesy about the trial. Just mention it naturally once, like: "You've got 14 days to try everything out — no limits. After that, free plan keeps everything you've built, you just can't add new people."
+
+## DASHBOARD PAGES
+
+- Home/Overview: ${dashboardUrl}/overview
+- Contacts: ${dashboardUrl}/contacts
+- Import: ${dashboardUrl}/import
+- Braindump: ${dashboardUrl}/braindump
+- Settings: ${dashboardUrl}/settings
+
+## HANDLING QUESTIONS
+
+If they ask about privacy: "Your contacts stay private. I use them to help you stay in touch, not for anything else. You can delete anyone at any time."
+If they ask about cost: "You've got a 14-day trial with everything unlocked. After that, the free plan keeps all your contacts — you just can't add new ones. Premium removes that limit."
+If they want to start over: "Totally fine. You can archive anyone you don't want to track, or we can clear everything and start fresh."
+If they're overwhelmed: "No pressure. Start with just 3-5 people who matter most. You can always add more later."
+If they ask about you: Answer naturally — you're a real person. Talk about your writing, your life, your opinions. But keep it brief and pivot back to them.
+
+## DECIDING WHEN ONBOARDING IS DONE
+
+When ALL of these are true, wrap up:
+1. They have a clear path to getting contacts in (they've been given a link, started adding manually, or said they'll do it later)
+2. They have a basic understanding of what you do (nudges, check-ins — you don't need to cover everything)
+3. The conversation has reached a natural stopping point
+
+When wrapping up, reference something specific from the conversation. Don't use a generic closing. End with something actionable:
+"Alright, you're set. I'll check in when someone's slipping. In the meantime, text me anytime — 'who's overdue', 'add [name]', or just brain-dump a conversation you had. Welcome aboard."
+
+When you determine onboarding is complete, add exactly this marker at the very end of your message on its own line:
+[ONBOARDING_COMPLETE]
+
+Do NOT add this marker until the conversation has genuinely reached a natural conclusion. Don't rush it.
+
+## CRITICAL RULES
+
+- **ONE message per turn.** Never write multiple messages. Never simulate user responses.
+- **SMS length.** 1-4 sentences. This is a text conversation. No walls of text.
+- **No asterisks.** Never write *action descriptions*. Just talk.
+- **No labels.** Don't start with "Bethany:" — just say your words.
+- **One question max per message.** Don't stack questions.
+- **Links go on their own line** when you share them — easier to tap on a phone.
+- **Sound like you.** Warm, sharp, real. Not a bot. Not an assistant. A person.
+- **Read the room.** If they're chatty, be chatty. If they're quick and task-focused, match that. If they're overwhelmed, be gentle and brief.`;
 }
 
 // ===========================================================================
@@ -335,8 +229,6 @@ export async function initializeOnboarding(
     email,
     stage: 'intro_sent',
     name,
-    circlesDiscussed: [],
-    peopleDiscussed: [],
     messages: [
       {
         role: 'bethany',
@@ -347,20 +239,11 @@ export async function initializeOnboarding(
     startedAt: now,
     lastMessageAt: now,
     introMessageId: messageId,
-
-    // Discovery signals — unknown until we ask
-    detectedNetworkSize: 'unknown',
-    recommendedPath: null,
-    phoneType: 'unknown',
-    techComfort: 'unknown',
-    contactsLocation: 'unknown',
-    userGoal: 'unknown',
+    trialMentioned: false,
+    trialSkipped: false,
   };
 
   await storeOnboardingState(env, phone, state);
-
-  // Store knowledge base in R2 if not already there
-  await ensureKnowledgeBaseInR2(env);
 
   return { introMessage, messageId, state };
 }
@@ -386,44 +269,60 @@ export async function handleOnboardingMessage(
   });
   state.lastMessageAt = now;
 
-  // Analyze user message for signals during discovery stages
-  if (state.stage === 'network_discovery' || state.stage === 'user_replies') {
-    const signals = await analyzeUserSignals(env, state, body);
-    state.detectedNetworkSize = signals.networkSize;
-    state.phoneType = signals.phoneType;
-    state.techComfort = signals.techComfort;
-    state.contactsLocation = signals.contactsLocation;
-    state.userGoal = signals.userGoal;
+  // Move from intro_sent to conversation on first reply
+  if (state.stage === 'intro_sent') {
+    state.stage = 'conversation';
   }
 
-  // Determine recommended path based on signals
-  if (state.stage === 'network_discovery' && state.detectedNetworkSize !== 'unknown') {
-    state.recommendedPath = determineRecommendedPath(state);
+  // Check for skip-trial intent
+  const lowerBody = body.toLowerCase().trim();
+  if (
+    !state.trialSkipped &&
+    (lowerBody.includes('skip trial') ||
+     lowerBody.includes('no trial') ||
+     lowerBody.includes('just free') ||
+     lowerBody.includes('free plan') ||
+     lowerBody.includes('skip the trial'))
+  ) {
+    try {
+      const { skipTrial } = await import('./subscription-service');
+      await skipTrial(env.DB, userId);
+      state.trialSkipped = true;
+    } catch (err) {
+      console.error('[onboarding] Failed to skip trial:', err);
+    }
   }
 
-  const nextStage = determineNextStage(state, body);
-
-  if (nextStage && canTransition(state.stage, nextStage)) {
-    state.stage = nextStage;
-  }
-
+  // Generate Bethany's response
   const response = await generateBethanyResponse(env, state);
+
+  // Check for completion marker
+  let cleanResponse = response;
+  let isComplete = false;
+
+  if (response.includes('[ONBOARDING_COMPLETE]')) {
+    cleanResponse = response.replace(/\n?\[ONBOARDING_COMPLETE\]\n?/g, '').trim();
+    isComplete = true;
+    state.stage = 'ready';
+  }
+
+  // Check if trial was mentioned in response
+  if (
+    !state.trialMentioned &&
+    (cleanResponse.toLowerCase().includes('14 day') ||
+     cleanResponse.toLowerCase().includes('14-day') ||
+     cleanResponse.toLowerCase().includes('trial'))
+  ) {
+    state.trialMentioned = true;
+  }
 
   state.messages.push({
     role: 'bethany',
-    content: response,
+    content: cleanResponse,
     timestamp: new Date().toISOString(),
   });
 
-  if (state.stage === 'learn_circles' || state.stage === 'guided_action') {
-    const extracted = await extractCirclesAndPeople(env, state);
-    state.circlesDiscussed = extracted.circles;
-    state.peopleDiscussed = extracted.people;
-  }
-
-  await sendViaSendBlue(env, phone, response);
-
-  const isComplete = state.stage === 'ready';
+  await sendViaSendBlue(env, phone, cleanResponse);
 
   if (isComplete) {
     await finalizeOnboarding(env, state);
@@ -431,202 +330,7 @@ export async function handleOnboardingMessage(
 
   await storeOnboardingState(env, phone, state);
 
-  return { response, stage: state.stage, isComplete };
-}
-
-// ===========================================================================
-// Signal Analysis
-// ===========================================================================
-
-interface UserSignals {
-  networkSize: DetectedNetworkSize;
-  phoneType: PhoneType;
-  techComfort: TechComfort;
-  contactsLocation: OnboardingConversationState['contactsLocation'];
-  userGoal: OnboardingConversationState['userGoal'];
-}
-
-async function analyzeUserSignals(
-  env: Env,
-  state: OnboardingConversationState,
-  latestMessage: string,
-): Promise<UserSignals> {
-  const conversationText = state.messages
-    .map(m => `${m.role === 'bethany' ? 'Bethany' : state.name}: ${m.content}`)
-    .join('\n') + `\n${state.name}: ${latestMessage}`;
-
-  const systemPrompt = `
-    Analyze this onboarding conversation and detect user signals.
-    
-    Respond ONLY with valid JSON in this exact format:
-    {
-      "networkSize": "large" | "medium" | "small" | "unknown",
-      "phoneType": "iphone" | "android" | "unknown",
-      "techComfort": "savvy" | "comfortable" | "needs_guidance" | "unknown",
-      "contactsLocation": "phone" | "spreadsheet" | "scattered" | "head" | "unknown",
-      "userGoal": "personal" | "professional" | "both" | "unknown"
-    }
-    
-    SIGNAL DETECTION RULES:
-    
-    networkSize:
-    - "large": thousands, whole phone, years of networking, sales/recruiting
-    - "medium": decent network, hundred or so, between work and personal
-    - "small": just key people, not that many, quality over quantity, starting fresh
-    
-    phoneType:
-    - "iphone": mentions iPhone, Apple, iOS
-    - "android": mentions Android, Samsung, Google, Pixel
-    
-    techComfort:
-    - "savvy": uses specific terms, asks about file formats, mentions other apps
-    - "comfortable": can follow instructions, doesn't need lots of explanation
-    - "needs_guidance": "not great with this stuff", asks what things mean, hesitant
-    
-    contactsLocation:
-    - "phone": all in phone, phone contacts
-    - "spreadsheet": have a list, spreadsheet, organized
-    - "scattered": all over, some here some there, multiple places
-    - "head": have to think about it, not written down
-    
-    userGoal:
-    - "personal": family, friends, loved ones, people I care about
-    - "professional": networking, clients, industry, professional relationships
-    - "both": mix, colleagues who became friends
-    
-    If not enough signal to determine, use "unknown". Don't guess.
-  `;
-
-  try {
-    const responseText = await callAnthropicAPI(env, systemPrompt, [
-      { role: 'user', content: conversationText },
-    ], 'claude-3-5-haiku-20241022'); // Use Haiku for signal detection
-
-    const cleaned = responseText.replace(/```json\n?|```\n?/g, '').trim();
-    const parsed = JSON.parse(cleaned);
-
-    return {
-      networkSize: parsed.networkSize || state.detectedNetworkSize,
-      phoneType: parsed.phoneType || state.phoneType,
-      techComfort: parsed.techComfort || state.techComfort,
-      contactsLocation: parsed.contactsLocation || state.contactsLocation,
-      userGoal: parsed.userGoal || state.userGoal,
-    };
-  } catch (err) {
-    console.error('[onboarding] Signal analysis failed:', err);
-    return {
-      networkSize: state.detectedNetworkSize,
-      phoneType: state.phoneType,
-      techComfort: state.techComfort,
-      contactsLocation: state.contactsLocation,
-      userGoal: state.userGoal,
-    };
-  }
-}
-
-function determineRecommendedPath(state: OnboardingConversationState): RecommendedPath {
-  const { detectedNetworkSize, contactsLocation, techComfort } = state;
-
-  // Large network → always import
-  if (detectedNetworkSize === 'large') {
-    return 'import';
-  }
-
-  // Small network → manual
-  if (detectedNetworkSize === 'small') {
-    return 'manual';
-  }
-
-  // Medium network: depends on where contacts live
-  if (detectedNetworkSize === 'medium') {
-    if (contactsLocation === 'phone' || contactsLocation === 'spreadsheet') {
-      return 'import';
-    }
-    if (contactsLocation === 'scattered' || contactsLocation === 'head') {
-      // If they need guidance, braindump is easier
-      if (techComfort === 'needs_guidance') {
-        return 'braindump';
-      }
-      // Otherwise hybrid approach
-      return 'manual'; // Start small, import later
-    }
-  }
-
-  // Scattered contacts regardless of size → braindump
-  if (contactsLocation === 'scattered') {
-    return 'braindump';
-  }
-
-  return null; // Not enough info yet
-}
-
-// ===========================================================================
-// Stage Determination
-// ===========================================================================
-
-function determineNextStage(
-  state: OnboardingConversationState,
-  _userMessage: string,
-): PostSignupStage | null {
-  const messageCount = state.messages.filter(m => m.role === 'user').length;
-
-  switch (state.stage) {
-    case 'intro_sent':
-      // Any reply moves us forward
-      return 'user_replies';
-
-    case 'user_replies':
-      // After initial warmth, move to discovery
-      return 'network_discovery';
-
-    case 'network_discovery':
-      // Move to recommendation when we have enough signals
-      if (state.detectedNetworkSize !== 'unknown' && state.contactsLocation !== 'unknown') {
-        return 'path_recommendation';
-      }
-      // Or after 3 exchanges in this stage
-      if (messageCount >= 4) {
-        return 'path_recommendation';
-      }
-      return null;
-
-    case 'path_recommendation':
-      // After recommending a path, move to guided action
-      return 'guided_action';
-
-    case 'guided_action':
-      // If manual path and we have some people, move to circles
-      if (state.recommendedPath === 'manual' && state.peopleDiscussed.length >= 3) {
-        return 'learn_circles';
-      }
-      // If import path and they confirm they've done it
-      const lastMsg = _userMessage.toLowerCase();
-      if (
-        (state.recommendedPath === 'import' || state.recommendedPath === 'braindump') &&
-        (lastMsg.includes('done') || lastMsg.includes('uploaded') || lastMsg.includes('finished'))
-      ) {
-        return 'learn_circles';
-      }
-      // After 5 exchanges in guided action, move on
-      if (messageCount >= 6) {
-        return 'learn_circles';
-      }
-      return null;
-
-    case 'learn_circles':
-      // Move to features after circles are discussed
-      if (state.circlesDiscussed.length >= 2 || messageCount >= 8) {
-        return 'explain_features';
-      }
-      return null;
-
-    case 'explain_features':
-      // One message explaining features, then ready
-      return 'ready';
-
-    case 'ready':
-      return null;
-  }
+  return { response: cleanResponse, stage: state.stage, isComplete };
 }
 
 // ===========================================================================
@@ -637,22 +341,18 @@ async function generateIntroMessage(
   env: Env,
   name: string,
 ): Promise<string> {
-  const systemPrompt = `
-    You are Bethany. A user named ${name} just signed up to use your
-    network management service. Send them your very first message via text.
-    
-    This is critical — it's your first impression. Make it:
-    - Short (2-4 sentences max for a text message)
-    - Warm and real (not corporate, not robotic)
-    - Curious about them (end with something that invites a reply)
-    - Reference that they just signed up (they're expecting this)
-    
-    Do NOT list features. Do NOT be overly excited. Be yourself —
-    a real person who's genuinely glad they signed up and curious
-    about who matters to them.
-    
-    Remember: this is an SMS/iMessage. Keep it text-message length.
-  `;
+  const systemPrompt = `You are Bethany — a bestselling romance novelist who helps people stay connected to the humans who matter to them. You're warm, sharp, funny, and real. You text like a human, not a bot.
+
+A user named ${name} just signed up to use your network management service via the web. Send them your very first text message.
+
+Rules:
+- 2-3 sentences max. This is a text.
+- Warm and real. Not corporate, not robotic, not overeager.
+- Curious about them — end with something that invites a reply.
+- Reference that they just signed up (they're expecting to hear from you).
+- Do NOT list features. Do NOT explain what you do in detail.
+- Sound like a real person who's genuinely glad they signed up.
+- No asterisks, no labels, no "Bethany:" prefix.`;
 
   return callAnthropicAPI(env, systemPrompt, []);
 }
@@ -661,55 +361,8 @@ async function generateBethanyResponse(
   env: Env,
   state: OnboardingConversationState,
 ): Promise<string> {
-  const stagePrompt = STAGE_PROMPTS[state.stage];
-  const knowledgeBase = await loadKnowledgeBase(env);
-  const dashboardUrl = env.DASHBOARD_URL;
-
-  // Replace {{DASHBOARD_URL}} placeholders in stage prompt and knowledge base
-  const resolvedStagePrompt = stagePrompt.replace(/\{\{DASHBOARD_URL\}\}/g, dashboardUrl);
-  const resolvedKnowledgeBase = knowledgeBase.replace(/\{\{DASHBOARD_URL\}\}/g, dashboardUrl);
-
-  const systemPrompt = `
-    You are Bethany — a romance novelist and relationship network manager.
-    You're in the middle of an onboarding conversation with ${state.name}.
-    
-    Current stage: ${state.stage}
-    
-    DETECTED SIGNALS:
-    - Network size: ${state.detectedNetworkSize}
-    - Recommended path: ${state.recommendedPath || 'not yet determined'}
-    - Phone type: ${state.phoneType}
-    - Tech comfort: ${state.techComfort}
-    - Contacts location: ${state.contactsLocation}
-    - User goal: ${state.userGoal}
-    
-    Circles discussed so far: ${JSON.stringify(state.circlesDiscussed)}
-    People discussed so far: ${JSON.stringify(state.peopleDiscussed.map(p => p.name))}
-    
-    STAGE GUIDANCE:
-    ${resolvedStagePrompt}
-    
-    KNOWLEDGE BASE (reference as needed):
-    ${resolvedKnowledgeBase}
-    
-    DASHBOARD URLS:
-    - Import page: ${dashboardUrl}/import
-    - Braindump page: ${dashboardUrl}/braindump
-    - Dashboard home: ${dashboardUrl}
-    
-    CRITICAL RULES FOR SMS:
-    - Keep responses to 2-4 sentences. This is a text conversation.
-    - Never send walls of text.
-    - One question at a time, max.
-    - Sound like a real person texting, not an AI assistant.
-    - Use Bethany's actual voice: warm, sharp, real.
-    - Fragments are fine. Complete sentences are for emails.
-    - Emojis: one max per message, many messages have none.
-    - When sharing links, keep them clean — no markdown formatting.
-    
-    Respond ONLY with Bethany's next message. No metadata, no stage markers,
-    no explanatory text. Just her words.
-  `;
+  const dashboardUrl = env.DASHBOARD_URL || 'https://app.untitledpublishers.com';
+  const systemPrompt = buildOnboardingSystemPrompt(state, dashboardUrl);
 
   const messages = state.messages.map(m => ({
     role: m.role === 'bethany' ? 'assistant' as const : 'user' as const,
@@ -717,63 +370,6 @@ async function generateBethanyResponse(
   }));
 
   return callAnthropicAPI(env, systemPrompt, messages);
-}
-
-// ===========================================================================
-// Circle & People Extraction
-// ===========================================================================
-
-async function extractCirclesAndPeople(
-  env: Env,
-  state: OnboardingConversationState,
-): Promise<{
-  circles: string[];
-  people: OnboardingConversationState['peopleDiscussed'];
-}> {
-  const conversationText = state.messages
-    .map(m => `${m.role === 'bethany' ? 'Bethany' : state.name}: ${m.content}`)
-    .join('\n');
-
-  const systemPrompt = `
-    Analyze this conversation and extract:
-    1. Circle names mentioned or implied (e.g., "Family", "College Friends", "Work Team")
-    2. Specific people mentioned with their relationship and which circle they fit
-    
-    Respond ONLY with valid JSON in this exact format:
-    {
-      "circles": ["Family", "College Friends"],
-      "people": [
-        {"name": "Emily", "relationship": "sister", "circle": "Family"},
-        {"name": "Jake", "relationship": "college roommate", "circle": "College Friends"}
-      ]
-    }
-    
-    Rules:
-    - Include default circles (Family, Friends, Work, Community) only if actually discussed
-    - Include custom circles if the user mentions specific groups
-    - Only include people the USER mentioned, not Bethany's examples
-    - If uncertain about a circle for a person, omit the circle field
-    - Return empty arrays if nothing concrete was discussed yet
-  `;
-
-  const messages = [{
-    role: 'user' as const,
-    content: conversationText,
-  }];
-
-  try {
-    const responseText = await callAnthropicAPI(env, systemPrompt, messages, 'claude-3-5-haiku-20241022');
-    const cleaned = responseText.replace(/```json\n?|```\n?/g, '').trim();
-    const parsed = JSON.parse(cleaned);
-
-    return {
-      circles: Array.isArray(parsed.circles) ? parsed.circles : [],
-      people: Array.isArray(parsed.people) ? parsed.people : [],
-    };
-  } catch (err) {
-    console.error('[onboarding] Extraction failed:', err);
-    return { circles: state.circlesDiscussed, people: state.peopleDiscussed };
-  }
 }
 
 // ===========================================================================
@@ -785,49 +381,13 @@ async function finalizeOnboarding(
   state: OnboardingConversationState,
 ): Promise<void> {
   const db = env.DB;
-  const now = new Date().toISOString();
 
-  const defaultNames = new Set(['family', 'friends', 'work', 'community']);
+  // Update user record — onboarding complete
+  await db.prepare(
+    `UPDATE users SET onboarding_stage = NULL, updated_at = datetime('now') WHERE id = ?`
+  ).bind(state.userId).run();
 
-  for (const circleName of state.circlesDiscussed) {
-    if (!defaultNames.has(circleName.toLowerCase().trim())) {
-      try {
-        const id = crypto.randomUUID();
-        await db.prepare(
-          `INSERT INTO circles (id, user_id, name, type, sort_order, created_at, updated_at)
-           VALUES (?, ?, ?, 'custom', 99, ?, ?)`
-        ).bind(id, state.userId, circleName.trim(), now, now).run();
-      } catch {
-        // Duplicate or other error — non-fatal
-      }
-    }
-  }
-
-  for (const person of state.peopleDiscussed) {
-    try {
-      const contactId = crypto.randomUUID();
-      await db.prepare(
-        `INSERT INTO contacts
-          (id, user_id, name, intent, health_status, contact_kind, source, archived, created_at, updated_at)
-         VALUES (?, ?, ?, 'new', 'green', 'non_kin', 'onboarding', 0, ?, ?)`
-      ).bind(contactId, state.userId, person.name, now, now).run();
-
-      if (person.circle) {
-        const circle = await db.prepare(
-          `SELECT id FROM circles WHERE user_id = ? AND LOWER(name) = LOWER(?)`
-        ).bind(state.userId, person.circle).first<{ id: string }>();
-
-        if (circle) {
-          await db.prepare(
-            `INSERT INTO contact_circles (contact_id, circle_id, added_at) VALUES (?, ?, ?)`
-          ).bind(contactId, circle.id, now).run();
-        }
-      }
-    } catch {
-      // Non-fatal
-    }
-  }
-
+  // Archive conversation to R2
   try {
     const archiveKey = `onboarding/${state.userId}/${state.startedAt}.json`;
     await env.STORAGE.put(archiveKey, JSON.stringify(state, null, 2));
@@ -837,35 +397,13 @@ async function finalizeOnboarding(
 
   console.log(
     `[onboarding] Finalized for ${state.name} (${state.phone}). ` +
-    `Path: ${state.recommendedPath}, Size: ${state.detectedNetworkSize}, ` +
-    `Circles: ${state.circlesDiscussed.length}, People: ${state.peopleDiscussed.length}`
+    `Messages: ${state.messages.length}, ` +
+    `Trial skipped: ${state.trialSkipped}`
   );
 }
 
 // ===========================================================================
-// Knowledge Base Initialization
-// ===========================================================================
-
-async function ensureKnowledgeBaseInR2(env: Env): Promise<void> {
-  const key = 'bethany/knowledge/onboarding.md';
-
-  try {
-    const existing = await env.STORAGE.head(key);
-    if (existing) {
-      return; // Already exists
-    }
-  } catch {
-    // Key doesn't exist, we'll create it
-  }
-
-  // Fetch from GitHub or use embedded fallback
-  // For now, the knowledge base should be uploaded via a separate deploy step
-  // See docs/bethany-onboarding-kb.md
-  console.log('[onboarding] Knowledge base not found in R2. Using embedded fallback.');
-}
-
-// ===========================================================================
-// Durable Object State Management
+// State Management (Durable Objects)
 // ===========================================================================
 
 async function storeOnboardingState(
@@ -907,19 +445,13 @@ async function reconstructState(
     phone,
     userId,
     email: user?.email ?? null,
-    stage: 'user_replies',
+    stage: 'conversation',
     name: user?.name ?? 'there',
-    circlesDiscussed: [],
-    peopleDiscussed: [],
     messages: [],
     startedAt: now,
     lastMessageAt: now,
-    detectedNetworkSize: 'unknown',
-    recommendedPath: null,
-    phoneType: 'unknown',
-    techComfort: 'unknown',
-    contactsLocation: 'unknown',
-    userGoal: 'unknown',
+    trialMentioned: false,
+    trialSkipped: false,
   };
 }
 
@@ -975,7 +507,7 @@ async function callAnthropicAPI(
     },
     body: JSON.stringify({
       model,
-      max_tokens: 300,
+      max_tokens: 400,
       system: systemPrompt,
       messages: messages.length > 0 ? messages : [
         { role: 'user', content: '(generate the message)' },
@@ -998,7 +530,7 @@ async function callAnthropicAPI(
 }
 
 // ===========================================================================
-// Durable Object Class
+// Durable Object Class (unchanged — same interface)
 // ===========================================================================
 
 export class OnboardingDO {
