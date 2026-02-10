@@ -57,7 +57,7 @@ export async function handleAdminRoute(
   if (path === '/api/admin/stats' && method === 'GET') {
     const perm = await requirePermission(db, userId, 'stats:read', request, origin);
     if (!perm.allowed) return perm.response;
-    return handleGetStats(db);
+    return handleGetStats(db, origin);
   }
 
   // -----------------------------------------------------------------------
@@ -120,7 +120,7 @@ export async function handleAdminRoute(
 // 1. GET /api/admin/stats
 // ===========================================================================
 
-async function handleGetStats(db: D1Database): Promise<Response> {
+async function handleGetStats(db: D1Database, origin?: string | null): Promise<Response> {
   // Run all stat queries in parallel
   const [
     totalUsers,
@@ -223,7 +223,7 @@ async function handleGetStats(db: D1Database): Promise<Response> {
       activeTrials: activeTrials?.count ?? 0,
       trialsExpiringSoon: trialsExpiringSoon?.count ?? 0,
     },
-  });
+  }, 200, origin);
 }
 
 // ===========================================================================
@@ -323,7 +323,7 @@ async function handleListUsers(
         hasMore: offset + limit < total,
       },
     },
-  });
+  }, 200, origin);
 }
 
 // ===========================================================================
@@ -435,7 +435,7 @@ async function handleGetUser(
         hasStripe: !!user.stripe_customer_id,
       },
     },
-  });
+  }, 200, origin);
 }
 
 // ===========================================================================
@@ -541,7 +541,7 @@ async function handleUpdateUser(
       pin_hash: undefined,
       passphrase: undefined,
     },
-  });
+  }, 200, origin);
 }
 
 // ===========================================================================
@@ -620,7 +620,7 @@ async function handleDeleteUser(
       userId: targetId,
       contactsDeleted: contactIds.length,
     },
-  });
+  }, 200, origin);
 }
 
 // ===========================================================================
@@ -662,7 +662,7 @@ async function handleGetActivity(
   // If we have date filters, we need to query directly instead of using
   // the audit service (which doesn't support date ranges yet)
   if (dateFrom || dateTo) {
-    return handleGetActivityWithDateRange(db, filters, dateFrom, dateTo, page, limit, offset);
+    return handleGetActivityWithDateRange(db, filters, dateFrom, dateTo, page, limit, offset, origin);
   }
 
   // Use audit service for standard queries
@@ -696,7 +696,7 @@ async function handleGetActivity(
         hasMore: offset + limit < total,
       },
     },
-  });
+  }, 200, origin);
 }
 
 /**
@@ -711,6 +711,7 @@ async function handleGetActivityWithDateRange(
   page: number,
   limit: number,
   offset: number,
+  origin?: string | null,
 ): Promise<Response> {
   const conditions: string[] = [];
   const params: unknown[] = [];
@@ -783,7 +784,7 @@ async function handleGetActivityWithDateRange(
         hasMore: offset + limit < total,
       },
     },
-  });
+  }, 200, origin);
 }
 
 // ===========================================================================
@@ -859,7 +860,7 @@ async function handleResendIntro(
       previousStage: target.onboarding_stage,
       newStage: 'intro_sent',
     },
-  });
+  }, 200, origin);
 }
 
 // ===========================================================================
