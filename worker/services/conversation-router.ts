@@ -49,6 +49,8 @@
  *
  * @see worker/routes/sms.ts for the webhook entry point
  * @see shared/models.ts for UserRow, ContactRow, IntentType
+ *
+ * Last deploy bump: 2026-02-11
  */
 
 import type { Env } from '../../shared/types';
@@ -68,7 +70,7 @@ export type ConversationIntent =
   | 'get_suggestions'
   | 'manage_circles'
   | 'sort_contact'
-  | 'sort_contacts'   // NEW: Batch sorting session
+  | 'sort_contacts'
   | 'add_contact'
   | 'braindump'
   | 'check_health'
@@ -421,13 +423,6 @@ export async function routeConversation(
 
 /**
  * Get the sub-handler for a given intent.
- *
- * Each handler is a standalone function that processes the classified
- * message and returns Bethany's response. Handlers are imported lazily
- * to keep the router module lightweight.
- *
- * TODO: As sub-handler files are created in future tasks, replace the
- * placeholder implementations below with proper imports.
  */
 function getHandler(intent: ConversationIntent): SubHandler {
   switch (intent) {
@@ -465,10 +460,6 @@ function getHandler(intent: ConversationIntent): SubHandler {
 
 /**
  * Handle low-confidence classifications by asking for clarification.
- *
- * Instead of guessing wrong, Bethany asks a natural follow-up question.
- * The response includes pending context so the next message can be
- * interpreted in the right frame.
  */
 function handleAmbiguous(
   classified: ClassifiedMessage,
@@ -476,7 +467,6 @@ function handleAmbiguous(
 ): ConversationResponse {
   const names = classified.contactNames;
 
-  // If they just sent a name with no context, ask what they want to do
   if (names.length === 1 && classified.rawMessage.trim().split(/\s+/).length <= 3) {
     return {
       reply: `What about ${names[0]}? I can look them up, log that you connected, move them to a different circle, or something else — just let me know!`,
@@ -490,7 +480,6 @@ function handleAmbiguous(
     };
   }
 
-  // Generic clarification
   return {
     reply: "I'm not quite sure what you're asking me to do. Could you give me a bit more detail? For example: \"I called Mom yesterday\" or \"How's my relationship with Jake?\"",
     expectsReply: true,
@@ -504,19 +493,9 @@ function handleAmbiguous(
 }
 
 // ===========================================================================
-// Placeholder Sub-Handlers
-//
-// These provide basic functionality now and will be replaced with full
-// implementations in future tasks. Each handler follows the SubHandler
-// signature and returns a ConversationResponse.
+// Sub-Handlers
 // ===========================================================================
 
-/**
- * query_contact — Look up information about a specific contact.
- *
- * Future: Full contact detail with health, circles, last interaction,
- * drift status, and Bethany's commentary.
- */
 const handleQueryContact: SubHandler = async (classified, user, env) => {
   if (classified.contactNames.length === 0) {
     return {
@@ -556,7 +535,6 @@ const handleQueryContact: SubHandler = async (classified, user, env) => {
     };
   }
 
-  // Multiple matches — ask which one
   const nameList = matches.map((c, i) => `${i + 1}. ${c.name} (${formatIntentLabel(c.intent)})`).join('\n');
   return {
     reply: `I found a few people matching "${name}":\n${nameList}\n\nWhich one?`,
@@ -570,12 +548,6 @@ const handleQueryContact: SubHandler = async (classified, user, env) => {
   };
 };
 
-/**
- * log_interaction — Record that the user connected with someone.
- *
- * Future: Full interaction logging with date parsing, method detection,
- * summary extraction, and health recalculation feedback.
- */
 const handleLogInteraction: SubHandler = async (classified, user, env) => {
   if (classified.contactNames.length === 0) {
     return {
@@ -618,7 +590,6 @@ const handleLogInteraction: SubHandler = async (classified, user, env) => {
     };
   }
 
-  // Use first match
   const contact = matches[0];
   const method = classified.interactionMethod ?? 'other';
   const date = classified.resolvedDate ?? new Date().toISOString();
@@ -646,16 +617,9 @@ const handleLogInteraction: SubHandler = async (classified, user, env) => {
   };
 };
 
-/**
- * get_suggestions — Recommend who to reach out to next.
- *
- * Future: Smart suggestions based on health status, drift alerts,
- * cadence timing, and user patterns.
- */
 const handleGetSuggestions: SubHandler = async (classified, user, env) => {
   const { listContacts } = await import('./contact-service');
 
-  // Find contacts that need attention (red first, then yellow)
   const redResult = await listContacts(env.DB, user.id, { health_status: 'red' }, { limit: 3, orderBy: 'last_contact_date', orderDir: 'asc' });
   const yellowResult = await listContacts(env.DB, user.id, { health_status: 'yellow' }, { limit: 3, orderBy: 'last_contact_date', orderDir: 'asc' });
 
@@ -691,12 +655,6 @@ const handleGetSuggestions: SubHandler = async (classified, user, env) => {
   return { reply: reply.trim(), expectsReply: true };
 };
 
-/**
- * manage_circles — Create, list, or modify circles.
- *
- * Future: Full circle CRUD, add/remove contacts from circles,
- * list circle contents.
- */
 const handleManageCircles: SubHandler = async (classified, user, env) => {
   const { listCirclesWithCounts } = await import('./circle-service');
   const circles = await listCirclesWithCounts(env.DB, user.id);
@@ -718,9 +676,6 @@ const handleManageCircles: SubHandler = async (classified, user, env) => {
   };
 };
 
-/**
- * sort_contact — Change a SINGLE contact's intent/layer.
- */
 const handleSortContact: SubHandler = async (classified, user, env) => {
   if (classified.contactNames.length === 0) {
     return {
@@ -730,7 +685,6 @@ const handleSortContact: SubHandler = async (classified, user, env) => {
   }
 
   if (!classified.targetIntent) {
-    // Use the intent assignment flow for a single contact
     const { searchContacts } = await import('./contact-service');
     const { startIntentAssignment } = await import('./intent-assignment-flow');
     
@@ -789,13 +743,6 @@ const handleSortContact: SubHandler = async (classified, user, env) => {
   };
 };
 
-/**
- * sort_contacts — Start a batch sorting session for unsorted contacts.
- *
- * This handler initiates the intent assignment flow for contacts that
- * have circles but no intent set. It walks through each contact one
- * by one, asking the user to assign an intent.
- */
 const handleSortContacts: SubHandler = async (classified, user, env) => {
   const { startSortingSession, countUnsortedContacts } = await import('./intent-assignment-flow');
   
@@ -829,9 +776,6 @@ const handleSortContacts: SubHandler = async (classified, user, env) => {
  *   1. checkSubscriptionStatus was called with (db, userId, env) but expects (db, userRow, now?)
  *   2. Checked non-existent `canAddContact` property on SubscriptionStatus
  *   3. No error handling around createContact — Bethany could claim success without DB write
- *
- * Now correctly checks subscription tier and wraps DB write in try/catch
- * with explicit null check on the returned contact.
  */
 const handleAddContact: SubHandler = async (classified, user, env) => {
   if (classified.contactNames.length === 0) {
@@ -853,7 +797,7 @@ const handleAddContact: SubHandler = async (classified, user, env) => {
   // Check subscription — pass the full user object, not just the ID
   const subStatus = await checkSubscriptionStatus(env.DB, user);
 
-  // Free tier users cannot add new contacts (hard freeze)
+  // Free tier users cannot add new contacts
   if (subStatus.tier === 'free') {
     return {
       reply: "Adding new contacts is a premium feature. Your existing contacts are still here — nothing's going anywhere. Upgrade to keep growing your network!",
@@ -903,19 +847,11 @@ const handleAddContact: SubHandler = async (classified, user, env) => {
   }
 };
 
-/**
- * braindump — Parse a long message with multiple contacts/interactions.
- *
- * Future: Full Claude-powered braindump parsing that extracts contacts,
- * interactions, and relationships in a single pass.
- */
 const handleBraindump: SubHandler = async (classified, user, env) => {
-  // Braindumps are complex — acknowledge and process asynchronously
   const contactCount = classified.contactNames.length;
   return {
     reply: `Got it — I caught ${contactCount} name${contactCount === 1 ? '' : 's'} in there. Let me process this and I'll confirm what I logged. Give me a moment!`,
     expectsReply: false,
-    // TODO: Trigger async braindump processing via Durable Object or queue
   };
 };
 
@@ -923,10 +859,7 @@ const handleBraindump: SubHandler = async (classified, user, env) => {
  * check_health — Show a network health summary.
  *
  * Also handles "how many contacts do I have", "list my contacts",
- * "who's in my network", etc. — any question about the user's
- * contact data that requires a database lookup.
- *
- * Includes unsorted contacts as an action item.
+ * "who's in my network", etc.
  */
 const handleCheckHealth: SubHandler = async (classified, user, env) => {
   const { getHealthCounts, getContactCount } = await import('./contact-service');
@@ -957,7 +890,6 @@ const handleCheckHealth: SubHandler = async (classified, user, env) => {
     reply += `\nMost active: ${stats.mostActiveContact.name} (${stats.mostActiveContact.count}x)`;
   }
 
-  // Add unsorted contacts warning
   if (unsortedCount > 0) {
     reply += `\n\n📋 ${unsortedCount} contact${unsortedCount === 1 ? '' : 's'} need sorting. Say "sort my contacts" to assign layers.`;
   }
@@ -969,15 +901,11 @@ const handleCheckHealth: SubHandler = async (classified, user, env) => {
   return { reply, expectsReply: healthCounts.red > 0 || unsortedCount > 0 };
 };
 
-/**
- * small_talk — Handle casual messages warmly.
- */
 const handleSmallTalk: SubHandler = async (classified, user) => {
   const msg = classified.rawMessage.toLowerCase().trim();
 
-  // Greetings
   if (/^(hey|hi|hello|morning|good morning|evening|yo|sup|what's up)/i.test(msg)) {
-    const hour = new Date().getUTCHours() - 5; // Rough Central Time
+    const hour = new Date().getUTCHours() - 5;
     const greeting = hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
     return {
       reply: `${greeting}, ${user.name}! What can I help you with today?`,
@@ -985,7 +913,6 @@ const handleSmallTalk: SubHandler = async (classified, user) => {
     };
   }
 
-  // Thanks
   if (/^(thanks|thank you|thx|ty|appreciate)/i.test(msg)) {
     return {
       reply: "You got it! Let me know if you need anything else.",
@@ -993,16 +920,12 @@ const handleSmallTalk: SubHandler = async (classified, user) => {
     };
   }
 
-  // Default warm response
   return {
     reply: `Ha, love it. Anything I can help you with, ${user.name}?`,
     expectsReply: true,
   };
 };
 
-/**
- * help — Explain what Bethany can do.
- */
 const handleHelp: SubHandler = async () => {
   return {
     reply: `Here's what I can help with:\n\n` +
@@ -1019,9 +942,6 @@ const handleHelp: SubHandler = async () => {
   };
 };
 
-/**
- * unknown — Last resort handler for unclassifiable messages.
- */
 const handleUnknown: SubHandler = async (classified, user) => {
   return {
     reply: `I'm not sure what to do with that one. You can tell me about someone you connected with, ask who needs attention, or type "help" to see what I can do.`,
@@ -1033,10 +953,6 @@ const handleUnknown: SubHandler = async (classified, user) => {
 // Utility Functions
 // ===========================================================================
 
-/**
- * Fallback classification when Claude is unavailable.
- * Uses basic keyword matching as a last resort.
- */
 function fallbackClassification(body: string): ClassifiedMessage {
   const lower = body.toLowerCase().trim();
 
@@ -1072,18 +988,12 @@ function fallbackClassification(body: string): ClassifiedMessage {
   };
 }
 
-/**
- * Check if a pending context has expired (5 minute window).
- */
 function isContextExpired(ctx: PendingContext): boolean {
   const created = new Date(ctx.createdAt).getTime();
   const now = Date.now();
-  return now - created > 5 * 60 * 1000; // 5 minutes
+  return now - created > 5 * 60 * 1000;
 }
 
-/**
- * Format a relative date for display. "2 days ago", "last week", etc.
- */
 function formatRelativeDate(isoDate: string): string {
   const date = new Date(isoDate);
   const now = new Date();
@@ -1099,9 +1009,6 @@ function formatRelativeDate(isoDate: string): string {
   return `${Math.floor(diffDays / 30)} months ago`;
 }
 
-/**
- * Format an intent type for display.
- */
 function formatIntentLabel(intent: string): string {
   const labels: Record<string, string> = {
     inner_circle: 'Inner Circle',
@@ -1114,9 +1021,6 @@ function formatIntentLabel(intent: string): string {
   return labels[intent] ?? intent;
 }
 
-/**
- * Format an interaction method for display.
- */
 function formatMethodLabel(method: InteractionMethod): string {
   const labels: Record<InteractionMethod, string> = {
     text: 'Text',
