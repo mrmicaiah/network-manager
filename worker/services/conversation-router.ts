@@ -193,10 +193,12 @@ INTENT TYPES:
 - sort_contacts: Organizing MULTIPLE contacts or starting a sorting session. "Sort my contacts" / "Help me organize" / "I have unsorted contacts" / "Let's go through my network" / "Organize my people"
 - add_contact: Adding a new person. "Add John Smith" / "New contact: Sarah Chen, she's a coworker" / "Remember my friend Jake, 555-1234"
 - braindump: Long message mentioning multiple people or events. "This week I called Mom, had coffee with Jake, ran into Sarah at the store, and need to follow up with Dave about the project"
-- check_health: Asking about overall network health. "How's my network?" / "Give me a summary" / "Dashboard" / "Status report"
+- check_health: Asking about overall network health, contact counts, or listing contacts. "How's my network?" / "Give me a summary" / "Dashboard" / "Status report" / "How many contacts do I have?" / "Who are my contacts?" / "List my contacts" / "Do I have any contacts?" / "Show me my network" / "Who's in my network?"
 - small_talk: Greetings, thanks, casual chat. "Hey" / "Thanks!" / "Good morning" / "You're the best" / "Haha"
 - help: Asking what Bethany can do. "Help" / "What can you do?" / "Commands" / "How does this work?"
 - unknown: Can't determine intent with reasonable confidence.
+
+IMPORTANT: Any question about how many contacts the user has, who their contacts are, or requests to list/show contacts MUST be classified as "check_health" — NEVER as "small_talk" or "unknown". These require a database lookup.
 
 ENTITY EXTRACTION:
 - contactNames: Array of people mentioned by name. Never include "Bethany" or "you" as a contact name.
@@ -823,8 +825,13 @@ const handleSortContacts: SubHandler = async (classified, user, env) => {
 /**
  * add_contact — Add a new person to the network.
  *
- * Future: Full contact creation with circle suggestion, intent
- * recommendation, and onboarding into the nudge system.
+ * BUG FIX (2026-02-10): Three issues were fixed:
+ *   1. checkSubscriptionStatus was called with (db, userId, env) but expects (db, userRow, now?)
+ *   2. Checked non-existent `canAddContact` property on SubscriptionStatus
+ *   3. No error handling around createContact — Bethany could claim success without DB write
+ *
+ * Now correctly checks subscription tier and wraps DB write in try/catch
+ * with explicit null check on the returned contact.
  */
 const handleAddContact: SubHandler = async (classified, user, env) => {
   if (classified.contactNames.length === 0) {
@@ -843,36 +850,57 @@ const handleAddContact: SubHandler = async (classified, user, env) => {
   const { createContact } = await import('./contact-service');
   const { checkSubscriptionStatus } = await import('./subscription-service');
 
-  // Check subscription limits
-  const subStatus = await checkSubscriptionStatus(env.DB, user.id, env);
-  if (subStatus && !subStatus.canAddContact) {
+  // Check subscription — pass the full user object, not just the ID
+  const subStatus = await checkSubscriptionStatus(env.DB, user);
+
+  // Free tier users cannot add new contacts (hard freeze)
+  if (subStatus.tier === 'free') {
     return {
-      reply: `You've hit the contact limit for your current plan (${subStatus.contactCount}/${subStatus.contactLimit}). Upgrade to premium for unlimited contacts!`,
+      reply: "Adding new contacts is a premium feature. Your existing contacts are still here — nothing's going anywhere. Upgrade to keep growing your network!",
       expectsReply: false,
     };
   }
 
   const name = classified.contactNames[0];
 
-  const contact = await createContact(env.DB, user.id, {
-    name,
-    source: 'sms',
-  });
+  try {
+    const contact = await createContact(env.DB, user.id, {
+      name,
+      source: 'sms',
+    });
 
-  // Immediately start intent assignment for the new contact
-  const { startIntentAssignment } = await import('./intent-assignment-flow');
-  const result = await startIntentAssignment(env, user, contact.id);
+    // Verify the contact was actually created and returned
+    if (!contact || !contact.id) {
+      console.error('[add_contact] createContact returned null/empty for:', name);
+      return {
+        reply: `I tried to add ${name} but something went wrong with the save. Mind trying again?`,
+        expectsReply: true,
+      };
+    }
 
-  return {
-    reply: `Added ${contact.name} to your network!\n\n${result.reply}`,
-    expectsReply: result.expectsReply,
-    pendingContext: result.pendingContext ? {
-      type: 'intent_assignment',
-      originalIntent: 'add_contact',
-      data: result.pendingContext as unknown as Record<string, unknown>,
-      createdAt: new Date().toISOString(),
-    } : undefined,
-  };
+    console.log(`[add_contact] Successfully created contact: ${contact.id} (${contact.name}) for user ${user.id}`);
+
+    // Immediately start intent assignment for the new contact
+    const { startIntentAssignment } = await import('./intent-assignment-flow');
+    const result = await startIntentAssignment(env, user, contact.id);
+
+    return {
+      reply: `Added ${contact.name} to your network!\n\n${result.reply}`,
+      expectsReply: result.expectsReply,
+      pendingContext: result.pendingContext ? {
+        type: 'intent_assignment',
+        originalIntent: 'add_contact',
+        data: result.pendingContext as unknown as Record<string, unknown>,
+        createdAt: new Date().toISOString(),
+      } : undefined,
+    };
+  } catch (err) {
+    console.error('[add_contact] Failed to create contact:', err);
+    return {
+      reply: `Something went wrong trying to add ${name}. Mind trying again?`,
+      expectsReply: true,
+    };
+  }
 };
 
 /**
@@ -894,6 +922,10 @@ const handleBraindump: SubHandler = async (classified, user, env) => {
 /**
  * check_health — Show a network health summary.
  *
+ * Also handles "how many contacts do I have", "list my contacts",
+ * "who's in my network", etc. — any question about the user's
+ * contact data that requires a database lookup.
+ *
  * Includes unsorted contacts as an action item.
  */
 const handleCheckHealth: SubHandler = async (classified, user, env) => {
@@ -910,12 +942,12 @@ const handleCheckHealth: SubHandler = async (classified, user, env) => {
 
   if (totalContacts === 0) {
     return {
-      reply: "You don't have any contacts yet! Start by telling me about the people in your life.",
+      reply: "You don't have any contacts yet! Start by telling me about the people in your life — try \"Add Sarah Chen\" or just brain-dump everyone you want to keep up with.",
       expectsReply: true,
     };
   }
 
-  let reply = `Network snapshot (${totalContacts} contacts):\n`;
+  let reply = `Network snapshot (${totalContacts} contact${totalContacts === 1 ? '' : 's'}):\n`;
   reply += `🟢 ${healthCounts.green} on track\n`;
   reply += `🟡 ${healthCounts.yellow} slipping\n`;
   reply += `🔴 ${healthCounts.red} overdue\n\n`;
@@ -1015,12 +1047,14 @@ function fallbackClassification(body: string): ClassifiedMessage {
     intent = 'help';
   } else if (/^(hey|hi|hello|morning|thanks|thank you|thx)/i.test(lower)) {
     intent = 'small_talk';
-  } else if (/^(status|summary|dashboard|health|how('s| is) my network)/i.test(lower)) {
+  } else if (/how many contacts|list.*contacts|who('s| is| are) (in )?my (network|contacts)|do i have.*contacts|show.*contacts|status|summary|dashboard|health|how('s| is) my network/i.test(lower)) {
     intent = 'check_health';
   } else if (/who should i|who needs|suggest|anyone i/i.test(lower)) {
     intent = 'get_suggestions';
   } else if (/sort my|organize|unsorted/i.test(lower)) {
     intent = 'sort_contacts';
+  } else if (/^add\s/i.test(lower)) {
+    intent = 'add_contact';
   }
 
   return {
