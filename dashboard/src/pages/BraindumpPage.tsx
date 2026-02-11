@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useLazyApi } from '../hooks/useApi';
 import {
   Brain,
@@ -18,6 +18,8 @@ import {
   Video,
   Globe,
   Users,
+  Send,
+  RotateCcw,
 } from 'lucide-react';
 
 // ===========================================================================
@@ -50,34 +52,25 @@ interface ExecuteResult {
   summary: string;
 }
 
-type ViewState = 'input' | 'loading' | 'confirm' | 'executing' | 'done' | 'error';
+type ViewState = 'input' | 'loading' | 'confirm' | 'refining' | 'executing' | 'done' | 'error';
 
 // ===========================================================================
 // Constants
 // ===========================================================================
 
 const INTENT_LABELS: Record<IntentType, string> = {
-  inner_circle: 'Inner Circle',
-  nurture: 'Nurture',
-  maintain: 'Maintain',
-  transactional: 'Transactional',
-  dormant: 'Dormant',
-  new: 'New',
+  inner_circle: 'Inner Circle', nurture: 'Nurture', maintain: 'Maintain',
+  transactional: 'Transactional', dormant: 'Dormant', new: 'New',
 };
 
 const INTENT_COLORS: Record<IntentType, string> = {
-  inner_circle: 'bg-bethany-100 text-bethany-700',
-  nurture: 'bg-blue-100 text-blue-700',
-  maintain: 'bg-sage-100 text-sage-700',
-  transactional: 'bg-charcoal-100 text-charcoal-600',
-  dormant: 'bg-charcoal-100 text-charcoal-500',
-  new: 'bg-golden-100 text-golden-600',
+  inner_circle: 'bg-bethany-100 text-bethany-700', nurture: 'bg-blue-100 text-blue-700',
+  maintain: 'bg-sage-100 text-sage-700', transactional: 'bg-charcoal-100 text-charcoal-600',
+  dormant: 'bg-charcoal-100 text-charcoal-500', new: 'bg-golden-100 text-golden-600',
 };
 
 const CONFIDENCE_BORDERS: Record<string, string> = {
-  high: 'border-l-sage-400',
-  medium: 'border-l-golden-400',
-  low: 'border-l-bethany-400',
+  high: 'border-l-sage-400', medium: 'border-l-golden-400', low: 'border-l-bethany-400',
 };
 
 const ACTION_CONFIG: Record<string, { icon: typeof UserPlus; label: string; color: string }> = {
@@ -89,20 +82,15 @@ const ACTION_CONFIG: Record<string, { icon: typeof UserPlus; label: string; colo
 };
 
 const METHOD_ICONS: Record<InteractionMethod, typeof Phone> = {
-  text: MessageSquare,
-  call: Phone,
-  in_person: Users,
-  email: Mail,
-  video: Video,
-  social: Globe,
-  other: MessageSquare,
+  text: MessageSquare, call: Phone, in_person: Users, email: Mail,
+  video: Video, social: Globe, other: MessageSquare,
 };
 
-const PLACEHOLDER_TEXT = `Had coffee with Sarah Chen yesterday — she's doing great at Google. Inner circle for sure.
+const PLACEHOLDER_TEXT = `Had coffee with Sarah yesterday — she's doing great at Google. Inner circle for sure.
 
-Mom called Sunday like usual. She wants to visit in March. Remind me to follow up.
+Mom called Sunday like usual. She wants to visit in March.
 
-Met a guy named Jake at the startup meetup Friday. Works in AI, could be a good work contact. Add him to my Work circle.
+Met Jake at the startup meetup Friday. Works in AI, could be a good work contact.
 
 I should move Lisa to nurture — we've been hanging out more lately.
 
@@ -119,9 +107,19 @@ export function BraindumpPage() {
   const [executeResult, setExecuteResult] = useState<ExecuteResult | null>(null);
   const [dismissedIndices, setDismissedIndices] = useState<Set<number>>(new Set());
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [correction, setCorrection] = useState('');
+  const correctionRef = useRef<HTMLInputElement>(null);
 
   const { execute: callParse } = useLazyApi<BraindumpParseResult>();
+  const { execute: callRefine } = useLazyApi<BraindumpParseResult>();
   const { execute: callExecute } = useLazyApi<ExecuteResult>();
+
+  // Auto-focus correction input when entering confirm state
+  useEffect(() => {
+    if (viewState === 'confirm' && correctionRef.current) {
+      // Don't steal focus on first load — only on refine completion
+    }
+  }, [viewState]);
 
   const handleSubmit = async () => {
     if (!text.trim()) return;
@@ -147,7 +145,46 @@ export function BraindumpPage() {
     setDismissedIndices((prev) => new Set([...prev, index]));
   };
 
+  const handleUndismiss = (index: number) => {
+    setDismissedIndices((prev) => {
+      const next = new Set(prev);
+      next.delete(index);
+      return next;
+    });
+  };
+
   const activeActions = parseResult?.actions.filter((_, i) => !dismissedIndices.has(i)) ?? [];
+
+  const handleRefine = async () => {
+    if (!correction.trim() || !parseResult) return;
+    setViewState('refining');
+
+    try {
+      const data = await callRefine('/api/braindump/refine', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          actions: activeActions,
+          correction: correction.trim(),
+        }),
+      });
+      setParseResult(data);
+      setDismissedIndices(new Set());
+      setCorrection('');
+      setViewState('confirm');
+    } catch (err) {
+      // If refine endpoint doesn't exist yet, show error but stay in confirm state
+      setErrorMessage(err instanceof Error ? err.message : 'Failed to process correction');
+      setViewState('confirm');
+    }
+  };
+
+  const handleCorrectionKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleRefine();
+    }
+  };
 
   const handleExecute = async () => {
     if (activeActions.length === 0) return;
@@ -173,6 +210,7 @@ export function BraindumpPage() {
     setExecuteResult(null);
     setDismissedIndices(new Set());
     setErrorMessage(null);
+    setCorrection('');
     setViewState('input');
   };
 
@@ -222,8 +260,8 @@ export function BraindumpPage() {
         </div>
       )}
 
-      {/* Confirmation */}
-      {viewState === 'confirm' && parseResult && (
+      {/* Confirmation + Refinement */}
+      {(viewState === 'confirm' || viewState === 'refining') && parseResult && (
         <div className="space-y-4">
           <div className="flex items-center justify-between">
             <button onClick={handleReset} className="text-charcoal-light hover:text-charcoal flex items-center gap-1 text-sm">
@@ -231,7 +269,7 @@ export function BraindumpPage() {
             </button>
             <p className="text-sm text-charcoal-light">
               {parseResult.actions.length} action{parseResult.actions.length !== 1 ? 's' : ''}
-              {dismissedIndices.size > 0 && ` (${activeActions.length} selected)`}
+              {dismissedIndices.size > 0 && ` (${activeActions.length} active)`}
             </p>
           </div>
 
@@ -247,18 +285,18 @@ export function BraindumpPage() {
             <div className="space-y-3">
               {parseResult.actions.map((action, index) => (
                 <ActionCard
-                  key={index}
+                  key={`${index}-${action.type}-${getActionTitle(action)}`}
                   action={action}
                   isDismissed={dismissedIndices.has(index)}
                   onDismiss={() => handleDismiss(index)}
+                  onUndismiss={() => handleUndismiss(index)}
                 />
               ))}
             </div>
           ) : (
             <div className="card text-center">
               <p className="text-charcoal-light">
-                I couldn't figure out any actions from that. Try being more specific about
-                names, interactions, or relationship changes.
+                Couldn't figure out any actions from that. Try being more specific.
               </p>
             </div>
           )}
@@ -275,18 +313,72 @@ export function BraindumpPage() {
             </div>
           )}
 
+          {/* Error from refine attempt */}
+          {errorMessage && viewState === 'confirm' && (
+            <div className="bg-red-50 rounded-2xl border border-red-200 px-4 py-3 flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-red-500 flex-shrink-0" />
+              <p className="text-sm text-red-700">{errorMessage}</p>
+              <button onClick={() => setErrorMessage(null)} className="ml-auto text-red-400 hover:text-red-600">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+
+          {/* Correction input */}
+          <div className="card !p-0 overflow-hidden">
+            <div className="px-4 py-3 bg-cream border-b border-cream-dark">
+              <p className="text-xs font-medium text-charcoal-500 uppercase tracking-wide">
+                Make corrections
+              </p>
+            </div>
+            <div className="flex items-center gap-2 p-3">
+              <input
+                ref={correctionRef}
+                type="text"
+                value={correction}
+                onChange={(e) => setCorrection(e.target.value)}
+                onKeyDown={handleCorrectionKeyDown}
+                placeholder='e.g. "Actually Sarah is family" or "Remove Jake" or "Also log a call with Mom"'
+                className="flex-1 px-3 py-2 rounded-xl bg-warm-white border border-cream-dark text-charcoal text-sm placeholder:text-charcoal-400 focus:outline-none focus:border-bethany-300"
+                disabled={viewState === 'refining'}
+              />
+              <button
+                onClick={handleRefine}
+                disabled={!correction.trim() || viewState === 'refining'}
+                className="p-2 bg-bethany-500 text-white rounded-xl hover:bg-bethany-600 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                title="Apply correction"
+              >
+                {viewState === 'refining' ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Send className="w-4 h-4" />
+                )}
+              </button>
+            </div>
+          </div>
+
           {/* Execute */}
-          {activeActions.length > 0 && (
+          {activeActions.length > 0 && viewState === 'confirm' && (
             <div className="card flex items-center justify-between">
               <div>
                 <p className="font-medium text-charcoal">
-                  Run {activeActions.length} action{activeActions.length !== 1 ? 's' : ''}?
+                  Looks good?
                 </p>
-                <p className="text-sm text-charcoal-light">Review above, dismiss anything that's wrong</p>
+                <p className="text-sm text-charcoal-light">
+                  {activeActions.length} action{activeActions.length !== 1 ? 's' : ''} ready to run
+                </p>
               </div>
               <button onClick={handleExecute} className="btn-primary">
-                <Check className="w-4 h-4" /> Execute
+                <Check className="w-4 h-4" /> Execute All
               </button>
+            </div>
+          )}
+
+          {/* Refining indicator */}
+          {viewState === 'refining' && (
+            <div className="card text-center">
+              <Loader2 className="w-6 h-6 text-bethany-500 animate-spin mx-auto mb-2" />
+              <p className="text-sm text-charcoal-light">Applying your correction...</p>
             </div>
           )}
         </div>
@@ -316,7 +408,6 @@ export function BraindumpPage() {
             </p>
           </div>
 
-          {/* Results breakdown */}
           <div className="space-y-2">
             {executeResult.results.map((r, i) => {
               const config = ACTION_CONFIG[r.action.type] || ACTION_CONFIG.edit_contact;
@@ -373,17 +464,24 @@ function ActionCard({
   action,
   isDismissed,
   onDismiss,
+  onUndismiss,
 }: {
   action: BraindumpAction;
   isDismissed: boolean;
   onDismiss: () => void;
+  onUndismiss: () => void;
 }) {
   if (isDismissed) {
     return (
       <div className="bg-cream-dark rounded-2xl border border-cream-dark p-4 opacity-50">
         <div className="flex items-center justify-between">
           <p className="text-charcoal-light line-through text-sm">{getActionSummary(action)}</p>
-          <span className="text-xs text-charcoal-400">Dismissed</span>
+          <button
+            onClick={onUndismiss}
+            className="text-xs text-bethany-500 hover:text-bethany-700 flex items-center gap-1"
+          >
+            <RotateCcw className="w-3 h-3" /> Undo
+          </button>
         </div>
       </div>
     );
@@ -396,7 +494,6 @@ function ActionCard({
     <div className={`bg-warm-white rounded-2xl border border-cream-dark p-4 border-l-4 shadow-soft ${CONFIDENCE_BORDERS[action.confidence]}`}>
       <div className="flex items-start justify-between gap-4">
         <div className="flex-1 min-w-0">
-          {/* Type badge + name */}
           <div className="flex items-center gap-2 flex-wrap mb-2">
             <span className={`inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-full ${config.color}`}>
               <Icon className="w-3 h-3" />
@@ -404,18 +501,13 @@ function ActionCard({
             </span>
             <h3 className="font-medium text-charcoal">{getActionTitle(action)}</h3>
           </div>
-
-          {/* Action-specific details */}
           <ActionDetails action={action} />
-
-          {/* Reasoning */}
           <p className="text-xs text-charcoal-400 mt-2 italic">"{action.reasoning}"</p>
         </div>
-
         <button
           onClick={onDismiss}
           className="p-1.5 text-charcoal-400 hover:text-charcoal-600 hover:bg-cream-dark rounded-xl transition-colors flex-shrink-0"
-          title="Dismiss"
+          title="Dismiss this action"
         >
           <X className="w-4 h-4" />
         </button>
@@ -425,7 +517,7 @@ function ActionCard({
 }
 
 // ===========================================================================
-// Action Details (type-specific content)
+// Action Details
 // ===========================================================================
 
 function ActionDetails({ action }: { action: BraindumpAction }) {
@@ -443,14 +535,12 @@ function ActionDetails({ action }: { action: BraindumpAction }) {
             </span>
           )}
           {(d.phone || d.email) && (
-            <p className="text-sm text-charcoal-light">
-              {[d.phone, d.email].filter(Boolean).join(' • ')}
-            </p>
+            <p className="text-sm text-charcoal-light">{[d.phone, d.email].filter(Boolean).join(' • ')}</p>
           )}
           {circles && circles.length > 0 && (
             <div className="flex items-center gap-1 flex-wrap">
               {circles.map((c, i) => (
-                <span key={i} className="px-2 py-0.5 bg-cream-dark text-charcoal-600 text-xs rounded-full">{c as string}</span>
+                <span key={i} className="px-2 py-0.5 bg-cream-dark text-charcoal-600 text-xs rounded-full">{c}</span>
               ))}
             </div>
           )}
@@ -504,9 +594,7 @@ function ActionDetails({ action }: { action: BraindumpAction }) {
           <span className="px-2 py-0.5 bg-cream-dark text-charcoal-600 text-xs rounded-full">
             {d.circle_name as string}
           </span>
-          {d.create_circle && (
-            <span className="text-xs text-golden-600">(new circle)</span>
-          )}
+          {d.create_circle && <span className="text-xs text-golden-600">(new circle)</span>}
         </div>
       );
     }
