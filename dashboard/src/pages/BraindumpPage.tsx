@@ -9,45 +9,48 @@ import {
   Sparkles,
   UserPlus,
   ArrowLeft,
+  MessageSquare,
+  ArrowRightLeft,
+  CircleDot,
+  Pencil,
+  Phone,
+  Mail,
+  Video,
+  Globe,
+  Users,
 } from 'lucide-react';
 
 // ===========================================================================
-// Types
+// Types (mirrors backend BraindumpAction types)
 // ===========================================================================
 
-interface ParsedContact {
-  name: string;
-  phone?: string;
-  email?: string;
-  suggested_intent?: IntentType;
-  suggested_circles?: string[];
-  notes?: string;
+type IntentType = 'inner_circle' | 'nurture' | 'maintain' | 'transactional' | 'dormant' | 'new';
+type InteractionMethod = 'text' | 'call' | 'in_person' | 'email' | 'video' | 'social' | 'other';
+
+interface BraindumpAction {
+  type: 'add_contact' | 'log_interaction' | 'update_layer' | 'assign_circle' | 'edit_contact';
+  data: Record<string, unknown>;
   confidence: 'high' | 'medium' | 'low';
+  reasoning: string;
 }
 
-interface ParsedInteraction {
-  contact_name: string;
-  date?: string;
-  method?: string;
+interface BraindumpParseResult {
+  actions: BraindumpAction[];
   summary: string;
-  confidence: 'high' | 'medium' | 'low';
-}
-
-interface BraindumpResult {
-  contacts: ParsedContact[];
-  interactions: ParsedInteraction[];
   unresolved: string[];
 }
 
-type IntentType =
-  | 'inner_circle'
-  | 'nurture'
-  | 'maintain'
-  | 'transactional'
-  | 'dormant'
-  | 'new';
+interface ExecuteResult {
+  results: Array<{
+    action: BraindumpAction;
+    success: boolean;
+    message: string;
+    resourceId?: string;
+  }>;
+  summary: string;
+}
 
-type ViewState = 'input' | 'loading' | 'confirm' | 'saving' | 'success' | 'error';
+type ViewState = 'input' | 'loading' | 'confirm' | 'executing' | 'done' | 'error';
 
 // ===========================================================================
 // Constants
@@ -71,21 +74,39 @@ const INTENT_COLORS: Record<IntentType, string> = {
   new: 'bg-golden-100 text-golden-600',
 };
 
-const CONFIDENCE_STYLES: Record<string, string> = {
+const CONFIDENCE_BORDERS: Record<string, string> = {
   high: 'border-l-sage-400',
   medium: 'border-l-golden-400',
   low: 'border-l-bethany-400',
 };
 
-const PLACEHOLDER_TEXT = `Sarah Chen - college roommate, lives in Denver now, works at Google. We should catch up monthly. Last talked about 3 weeks ago about her new job.
+const ACTION_CONFIG: Record<string, { icon: typeof UserPlus; label: string; color: string }> = {
+  add_contact: { icon: UserPlus, label: 'Add Contact', color: 'text-sage-600 bg-sage-50' },
+  log_interaction: { icon: MessageSquare, label: 'Log Interaction', color: 'text-blue-600 bg-blue-50' },
+  update_layer: { icon: ArrowRightLeft, label: 'Change Layer', color: 'text-bethany-600 bg-bethany-50' },
+  assign_circle: { icon: CircleDot, label: 'Assign Circle', color: 'text-purple-600 bg-purple-50' },
+  edit_contact: { icon: Pencil, label: 'Edit Contact', color: 'text-golden-600 bg-golden-50' },
+};
 
-Mom - call every Sunday. She mentioned wanting to visit in March. Family circle.
+const METHOD_ICONS: Record<InteractionMethod, typeof Phone> = {
+  text: MessageSquare,
+  call: Phone,
+  in_person: Users,
+  email: Mail,
+  video: Video,
+  social: Globe,
+  other: MessageSquare,
+};
 
-Jake from work - grab lunch sometime, he knows a lot about the startup scene. Work circle, maybe transactional.
+const PLACEHOLDER_TEXT = `Had coffee with Sarah Chen yesterday — she's doing great at Google. Inner circle for sure.
 
-My therapist Dr. Martinez - appointments every two weeks. Professional, don't need to track socially.
+Mom called Sunday like usual. She wants to visit in March. Remind me to follow up.
 
-Best friend Mike - inner circle for sure. We've been friends since middle school. His birthday is in April.`;
+Met a guy named Jake at the startup meetup Friday. Works in AI, could be a good work contact. Add him to my Work circle.
+
+I should move Lisa to nurture — we've been hanging out more lately.
+
+Mike's new email is mike.johnson@gmail.com`;
 
 // ===========================================================================
 // Component
@@ -94,84 +115,63 @@ Best friend Mike - inner circle for sure. We've been friends since middle school
 export function BraindumpPage() {
   const [text, setText] = useState('');
   const [viewState, setViewState] = useState<ViewState>('input');
-  const [result, setResult] = useState<BraindumpResult | null>(null);
+  const [parseResult, setParseResult] = useState<BraindumpParseResult | null>(null);
+  const [executeResult, setExecuteResult] = useState<ExecuteResult | null>(null);
   const [dismissedIndices, setDismissedIndices] = useState<Set<number>>(new Set());
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const { execute: parse } = useLazyApi<BraindumpResult>();
-  const { execute: saveContacts } = useLazyApi<{ created: number }>();
+  const { execute: callParse } = useLazyApi<BraindumpParseResult>();
+  const { execute: callExecute } = useLazyApi<ExecuteResult>();
 
-  // Handle form submission
   const handleSubmit = async () => {
     if (!text.trim()) return;
-
     setViewState('loading');
     setErrorMessage(null);
 
     try {
-      const data = await parse('/api/braindump/parse', {
+      const data = await callParse('/api/braindump/parse', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text: text.trim() }),
       });
-
-      setResult(data);
+      setParseResult(data);
       setDismissedIndices(new Set());
       setViewState('confirm');
     } catch (err) {
-      setErrorMessage(err instanceof Error ? err.message : 'Failed to parse contacts');
+      setErrorMessage(err instanceof Error ? err.message : 'Failed to process');
       setViewState('error');
     }
   };
 
-  // Dismiss a single contact
   const handleDismiss = (index: number) => {
     setDismissedIndices((prev) => new Set([...prev, index]));
   };
 
-  // Get contacts that haven't been dismissed
-  const activeContacts = result?.contacts.filter((_, i) => !dismissedIndices.has(i)) ?? [];
+  const activeActions = parseResult?.actions.filter((_, i) => !dismissedIndices.has(i)) ?? [];
 
-  // Save all accepted contacts
-  const handleSaveAll = async () => {
-    if (activeContacts.length === 0) return;
-
-    setViewState('saving');
+  const handleExecute = async () => {
+    if (activeActions.length === 0) return;
+    setViewState('executing');
 
     try {
-      for (const contact of activeContacts) {
-        await saveContacts('/api/contacts', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            name: contact.name,
-            phone: contact.phone,
-            email: contact.email,
-            intent: contact.suggested_intent ?? 'new',
-            notes: contact.notes,
-            source: 'braindump',
-          }),
-        });
-      }
-
-      setViewState('success');
+      const data = await callExecute('/api/braindump/execute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ actions: activeActions }),
+      });
+      setExecuteResult(data);
+      setViewState('done');
     } catch (err) {
-      setErrorMessage(err instanceof Error ? err.message : 'Failed to save contacts');
+      setErrorMessage(err instanceof Error ? err.message : 'Failed to execute actions');
       setViewState('error');
     }
   };
 
-  // Reset to input state
   const handleReset = () => {
     setText('');
-    setResult(null);
+    setParseResult(null);
+    setExecuteResult(null);
     setDismissedIndices(new Set());
-    setErrorMessage(null);
-    setViewState('input');
-  };
-
-  // Start over with same text
-  const handleRetry = () => {
     setErrorMessage(null);
     setViewState('input');
   };
@@ -182,12 +182,11 @@ export function BraindumpPage() {
       <div className="mb-6">
         <h1 className="font-display text-2xl font-medium text-charcoal mb-2">Braindump</h1>
         <p className="text-charcoal-light">
-          Tell me about your contacts. Names, how you know them, what circle they belong to.
-          I'll sort it out.
+          Tell me what's going on with your people. I'll figure out the rest.
         </p>
       </div>
 
-      {/* Input State */}
+      {/* Input */}
       {viewState === 'input' && (
         <div className="card !p-0 overflow-hidden">
           <textarea
@@ -200,13 +199,9 @@ export function BraindumpPage() {
           <div className="px-5 py-4 border-t border-cream-dark flex items-center justify-between bg-cream rounded-b-2xl">
             <p className="text-sm text-charcoal-light flex items-center gap-2">
               <Brain className="w-4 h-4 text-bethany-500" />
-              I'll extract contacts, relationships, and notes automatically
+              Contacts, interactions, circles, layers — I'll sort it all out
             </p>
-            <button
-              onClick={handleSubmit}
-              disabled={!text.trim()}
-              className="btn-primary"
-            >
+            <button onClick={handleSubmit} disabled={!text.trim()} className="btn-primary">
               <Sparkles className="w-4 h-4" />
               Process
             </button>
@@ -214,44 +209,46 @@ export function BraindumpPage() {
         </div>
       )}
 
-      {/* Loading State */}
+      {/* Loading */}
       {viewState === 'loading' && (
         <div className="card text-center">
           <div className="w-16 h-16 bg-bethany-50 rounded-full flex items-center justify-center mx-auto mb-4">
             <Loader2 className="w-8 h-8 text-bethany-500 animate-spin" />
           </div>
-          <h2 className="text-lg font-medium text-charcoal mb-2">Processing your braindump...</h2>
+          <h2 className="text-lg font-medium text-charcoal mb-2">Processing...</h2>
           <p className="text-charcoal-light max-w-sm mx-auto">
-            I'm reading through everything and extracting the contacts, circles, and notes.
+            Reading through everything and figuring out what needs to happen.
           </p>
         </div>
       )}
 
-      {/* Confirmation State */}
-      {viewState === 'confirm' && result && (
+      {/* Confirmation */}
+      {viewState === 'confirm' && parseResult && (
         <div className="space-y-4">
-          {/* Back button and count */}
           <div className="flex items-center justify-between">
-            <button
-              onClick={handleReset}
-              className="text-charcoal-light hover:text-charcoal flex items-center gap-1 text-sm"
-            >
-              <ArrowLeft className="w-4 h-4" />
-              Start over
+            <button onClick={handleReset} className="text-charcoal-light hover:text-charcoal flex items-center gap-1 text-sm">
+              <ArrowLeft className="w-4 h-4" /> Start over
             </button>
             <p className="text-sm text-charcoal-light">
-              Found {result.contacts.length} contact{result.contacts.length !== 1 ? 's' : ''}
-              {dismissedIndices.size > 0 && ` (${activeContacts.length} selected)`}
+              {parseResult.actions.length} action{parseResult.actions.length !== 1 ? 's' : ''}
+              {dismissedIndices.size > 0 && ` (${activeActions.length} selected)`}
             </p>
           </div>
 
-          {/* Contact cards */}
-          {result.contacts.length > 0 ? (
+          {/* Summary */}
+          {parseResult.summary && (
+            <div className="bg-bethany-50 rounded-2xl border border-bethany-100 px-4 py-3">
+              <p className="text-sm text-bethany-800">{parseResult.summary}</p>
+            </div>
+          )}
+
+          {/* Action cards */}
+          {parseResult.actions.length > 0 ? (
             <div className="space-y-3">
-              {result.contacts.map((contact, index) => (
-                <ContactCard
+              {parseResult.actions.map((action, index) => (
+                <ActionCard
                   key={index}
-                  contact={contact}
+                  action={action}
                   isDismissed={dismissedIndices.has(index)}
                   onDismiss={() => handleDismiss(index)}
                 />
@@ -260,92 +257,96 @@ export function BraindumpPage() {
           ) : (
             <div className="card text-center">
               <p className="text-charcoal-light">
-                I couldn't find any contacts in that text. Try adding more details like names
-                and how you know them.
+                I couldn't figure out any actions from that. Try being more specific about
+                names, interactions, or relationship changes.
               </p>
             </div>
           )}
 
-          {/* Unresolved items */}
-          {result.unresolved.length > 0 && (
+          {/* Unresolved */}
+          {parseResult.unresolved.length > 0 && (
             <div className="bg-golden-50 rounded-2xl border border-golden-200 p-4">
-              <p className="text-sm font-medium text-golden-800 mb-2">
-                Couldn't parse these parts:
-              </p>
+              <p className="text-sm font-medium text-golden-800 mb-2">Couldn't parse:</p>
               <ul className="text-sm text-golden-700 space-y-1">
-                {result.unresolved.map((item, i) => (
-                  <li key={i} className="truncate">
-                    • {item}
-                  </li>
+                {parseResult.unresolved.map((item, i) => (
+                  <li key={i} className="truncate">• {item}</li>
                 ))}
               </ul>
             </div>
           )}
 
-          {/* Save action */}
-          {activeContacts.length > 0 && (
+          {/* Execute */}
+          {activeActions.length > 0 && (
             <div className="card flex items-center justify-between">
               <div>
                 <p className="font-medium text-charcoal">
-                  Add {activeContacts.length} contact{activeContacts.length !== 1 ? 's' : ''}?
+                  Run {activeActions.length} action{activeActions.length !== 1 ? 's' : ''}?
                 </p>
-                <p className="text-sm text-charcoal-light">
-                  You can edit details later from the contacts page
-                </p>
+                <p className="text-sm text-charcoal-light">Review above, dismiss anything that's wrong</p>
               </div>
-              <button
-                onClick={handleSaveAll}
-                className="btn-primary"
-              >
-                <Check className="w-4 h-4" />
-                Save All
+              <button onClick={handleExecute} className="btn-primary">
+                <Check className="w-4 h-4" /> Execute
               </button>
             </div>
           )}
         </div>
       )}
 
-      {/* Saving State */}
-      {viewState === 'saving' && (
+      {/* Executing */}
+      {viewState === 'executing' && (
         <div className="card text-center">
           <div className="w-16 h-16 bg-bethany-50 rounded-full flex items-center justify-center mx-auto mb-4">
             <Loader2 className="w-8 h-8 text-bethany-500 animate-spin" />
           </div>
-          <h2 className="text-lg font-medium text-charcoal mb-2">Saving contacts...</h2>
-          <p className="text-charcoal-light">Adding {activeContacts.length} contacts to your network</p>
+          <h2 className="text-lg font-medium text-charcoal mb-2">Executing actions...</h2>
+          <p className="text-charcoal-light">Running {activeActions.length} actions</p>
         </div>
       )}
 
-      {/* Success State */}
-      {viewState === 'success' && (
-        <div className="card text-center">
-          <div className="w-16 h-16 bg-sage-50 rounded-full flex items-center justify-center mx-auto mb-4">
-            <Check className="w-8 h-8 text-sage-500" />
+      {/* Done */}
+      {viewState === 'done' && executeResult && (
+        <div className="space-y-4">
+          <div className="card text-center">
+            <div className="w-16 h-16 bg-sage-50 rounded-full flex items-center justify-center mx-auto mb-4">
+              <Check className="w-8 h-8 text-sage-500" />
+            </div>
+            <h2 className="text-lg font-medium text-charcoal mb-2">Done!</h2>
+            <p className="text-charcoal-light max-w-sm mx-auto mb-4">
+              {executeResult.summary}
+            </p>
           </div>
-          <h2 className="text-lg font-medium text-charcoal mb-2">Contacts added!</h2>
-          <p className="text-charcoal-light max-w-sm mx-auto mb-6">
-            Your contacts are now in the system. You can set up circles and adjust details
-            from the contacts page.
-          </p>
-          <div className="flex items-center justify-center gap-3">
-            <button
-              onClick={handleReset}
-              className="btn-primary"
-            >
-              <UserPlus className="w-4 h-4" />
-              Add More
+
+          {/* Results breakdown */}
+          <div className="space-y-2">
+            {executeResult.results.map((r, i) => {
+              const config = ACTION_CONFIG[r.action.type] || ACTION_CONFIG.edit_contact;
+              const Icon = config.icon;
+              return (
+                <div key={i} className={`flex items-center gap-3 px-4 py-3 rounded-xl ${r.success ? 'bg-sage-50' : 'bg-red-50'}`}>
+                  <Icon className={`w-4 h-4 flex-shrink-0 ${r.success ? 'text-sage-600' : 'text-red-500'}`} />
+                  <span className={`text-sm flex-1 ${r.success ? 'text-sage-800' : 'text-red-800'}`}>
+                    {r.message}
+                  </span>
+                  {r.success ? (
+                    <Check className="w-4 h-4 text-sage-500 flex-shrink-0" />
+                  ) : (
+                    <X className="w-4 h-4 text-red-400 flex-shrink-0" />
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="flex items-center justify-center gap-3 pt-2">
+            <button onClick={handleReset} className="btn-primary">
+              <Brain className="w-4 h-4" /> Dump More
             </button>
-            <a
-              href="/contacts"
-              className="btn-secondary"
-            >
-              View Contacts
-            </a>
+            <a href="/contacts" className="btn-secondary">View Contacts</a>
           </div>
         </div>
       )}
 
-      {/* Error State */}
+      {/* Error */}
       {viewState === 'error' && (
         <div className="card border-red-200 text-center">
           <div className="w-16 h-16 bg-red-50 rounded-full flex items-center justify-center mx-auto mb-4">
@@ -353,12 +354,9 @@ export function BraindumpPage() {
           </div>
           <h2 className="text-lg font-medium text-charcoal mb-2">Something went wrong</h2>
           <p className="text-charcoal-light max-w-sm mx-auto mb-6">
-            {errorMessage || 'An unexpected error occurred. Please try again.'}
+            {errorMessage || 'An unexpected error occurred.'}
           </p>
-          <button
-            onClick={handleRetry}
-            className="btn-primary"
-          >
+          <button onClick={() => { setErrorMessage(null); setViewState('input'); }} className="btn-primary">
             Try Again
           </button>
         </div>
@@ -368,15 +366,15 @@ export function BraindumpPage() {
 }
 
 // ===========================================================================
-// Contact Card Component
+// Action Card
 // ===========================================================================
 
-function ContactCard({
-  contact,
+function ActionCard({
+  action,
   isDismissed,
   onDismiss,
 }: {
-  contact: ParsedContact;
+  action: BraindumpAction;
   isDismissed: boolean;
   onDismiss: () => void;
 }) {
@@ -384,81 +382,179 @@ function ContactCard({
     return (
       <div className="bg-cream-dark rounded-2xl border border-cream-dark p-4 opacity-50">
         <div className="flex items-center justify-between">
-          <p className="text-charcoal-light line-through">{contact.name}</p>
-          <span className="text-sm text-charcoal-400">Dismissed</span>
+          <p className="text-charcoal-light line-through text-sm">{getActionSummary(action)}</p>
+          <span className="text-xs text-charcoal-400">Dismissed</span>
         </div>
       </div>
     );
   }
 
-  const intentLabel = contact.suggested_intent
-    ? INTENT_LABELS[contact.suggested_intent]
-    : null;
-  const intentColor = contact.suggested_intent
-    ? INTENT_COLORS[contact.suggested_intent]
-    : '';
+  const config = ACTION_CONFIG[action.type] || ACTION_CONFIG.edit_contact;
+  const Icon = config.icon;
 
   return (
-    <div
-      className={`bg-warm-white rounded-2xl border border-cream-dark p-4 border-l-4 shadow-soft ${
-        CONFIDENCE_STYLES[contact.confidence]
-      }`}
-    >
+    <div className={`bg-warm-white rounded-2xl border border-cream-dark p-4 border-l-4 shadow-soft ${CONFIDENCE_BORDERS[action.confidence]}`}>
       <div className="flex items-start justify-between gap-4">
         <div className="flex-1 min-w-0">
-          {/* Name and intent */}
+          {/* Type badge + name */}
           <div className="flex items-center gap-2 flex-wrap mb-2">
-            <h3 className="font-medium text-charcoal">{contact.name}</h3>
-            {intentLabel && (
-              <span
-                className={`px-2 py-0.5 text-xs font-medium rounded-full ${intentColor}`}
-              >
-                {intentLabel}
-              </span>
-            )}
+            <span className={`inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-full ${config.color}`}>
+              <Icon className="w-3 h-3" />
+              {config.label}
+            </span>
+            <h3 className="font-medium text-charcoal">{getActionTitle(action)}</h3>
           </div>
 
-          {/* Contact info */}
-          {(contact.phone || contact.email) && (
-            <p className="text-sm text-charcoal-light mb-2">
-              {[contact.phone, contact.email].filter(Boolean).join(' • ')}
-            </p>
-          )}
+          {/* Action-specific details */}
+          <ActionDetails action={action} />
 
-          {/* Circles */}
-          {contact.suggested_circles && contact.suggested_circles.length > 0 && (
-            <div className="flex items-center gap-1 flex-wrap mb-2">
-              {contact.suggested_circles.map((circle, i) => (
-                <span
-                  key={i}
-                  className="px-2 py-0.5 bg-cream-dark text-charcoal-600 text-xs rounded-full"
-                >
-                  {circle}
-                </span>
-              ))}
-            </div>
-          )}
-
-          {/* Notes */}
-          {contact.notes && (
-            <p className="text-sm text-charcoal-light mt-2 italic">"{contact.notes}"</p>
-          )}
-
-          {/* Confidence indicator */}
-          <p className="text-xs text-charcoal-400 mt-2 capitalize">
-            {contact.confidence} confidence
-          </p>
+          {/* Reasoning */}
+          <p className="text-xs text-charcoal-400 mt-2 italic">"{action.reasoning}"</p>
         </div>
 
-        {/* Dismiss button */}
         <button
           onClick={onDismiss}
           className="p-1.5 text-charcoal-400 hover:text-charcoal-600 hover:bg-cream-dark rounded-xl transition-colors flex-shrink-0"
-          title="Don't add this contact"
+          title="Dismiss"
         >
           <X className="w-4 h-4" />
         </button>
       </div>
     </div>
   );
+}
+
+// ===========================================================================
+// Action Details (type-specific content)
+// ===========================================================================
+
+function ActionDetails({ action }: { action: BraindumpAction }) {
+  const d = action.data;
+
+  switch (action.type) {
+    case 'add_contact': {
+      const intent = d.suggested_intent as IntentType | undefined;
+      const circles = d.suggested_circles as string[] | undefined;
+      return (
+        <div className="space-y-1.5">
+          {intent && (
+            <span className={`inline-block px-2 py-0.5 text-xs font-medium rounded-full ${INTENT_COLORS[intent]}`}>
+              {INTENT_LABELS[intent]}
+            </span>
+          )}
+          {(d.phone || d.email) && (
+            <p className="text-sm text-charcoal-light">
+              {[d.phone, d.email].filter(Boolean).join(' • ')}
+            </p>
+          )}
+          {circles && circles.length > 0 && (
+            <div className="flex items-center gap-1 flex-wrap">
+              {circles.map((c, i) => (
+                <span key={i} className="px-2 py-0.5 bg-cream-dark text-charcoal-600 text-xs rounded-full">{c as string}</span>
+              ))}
+            </div>
+          )}
+          {d.notes && <p className="text-sm text-charcoal-light italic">"{d.notes as string}"</p>}
+          {d.contact_kind === 'kin' && (
+            <span className="inline-block px-2 py-0.5 text-xs font-medium rounded-full bg-bethany-50 text-bethany-600">Family</span>
+          )}
+        </div>
+      );
+    }
+
+    case 'log_interaction': {
+      const method = d.method as InteractionMethod;
+      const MethodIcon = METHOD_ICONS[method] || MessageSquare;
+      return (
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-2 text-sm text-charcoal-light">
+            <MethodIcon className="w-3.5 h-3.5" />
+            <span className="capitalize">{(method || '').replace('_', ' ')}</span>
+            {d.date && <span>• {d.date as string}</span>}
+          </div>
+          {d.summary && <p className="text-sm text-charcoal-light">"{d.summary as string}"</p>}
+          {d.contact_id && <p className="text-xs text-sage-600">Matched to existing contact</p>}
+        </div>
+      );
+    }
+
+    case 'update_layer': {
+      const current = d.current_intent as IntentType | undefined;
+      const newIntent = d.new_intent as IntentType;
+      return (
+        <div className="flex items-center gap-2 flex-wrap">
+          {current && (
+            <>
+              <span className={`px-2 py-0.5 text-xs font-medium rounded-full ${INTENT_COLORS[current]}`}>
+                {INTENT_LABELS[current]}
+              </span>
+              <ArrowRightLeft className="w-3.5 h-3.5 text-charcoal-400" />
+            </>
+          )}
+          <span className={`px-2 py-0.5 text-xs font-medium rounded-full ${INTENT_COLORS[newIntent]}`}>
+            {INTENT_LABELS[newIntent]}
+          </span>
+        </div>
+      );
+    }
+
+    case 'assign_circle': {
+      return (
+        <div className="flex items-center gap-2">
+          <span className="px-2 py-0.5 bg-cream-dark text-charcoal-600 text-xs rounded-full">
+            {d.circle_name as string}
+          </span>
+          {d.create_circle && (
+            <span className="text-xs text-golden-600">(new circle)</span>
+          )}
+        </div>
+      );
+    }
+
+    case 'edit_contact': {
+      const updates = d.updates as Record<string, unknown> | undefined;
+      if (!updates) return null;
+      const fields = Object.entries(updates).filter(([, v]) => v !== undefined);
+      return (
+        <div className="space-y-1">
+          {fields.map(([key, value]) => (
+            <p key={key} className="text-sm text-charcoal-light">
+              <span className="capitalize text-charcoal-500">{key.replace('_', ' ')}:</span> {String(value)}
+            </p>
+          ))}
+        </div>
+      );
+    }
+
+    default:
+      return null;
+  }
+}
+
+// ===========================================================================
+// Helpers
+// ===========================================================================
+
+function getActionTitle(action: BraindumpAction): string {
+  const d = action.data;
+  switch (action.type) {
+    case 'add_contact': return d.name as string;
+    case 'log_interaction': return d.contact_name as string;
+    case 'update_layer': return d.contact_name as string;
+    case 'assign_circle': return d.contact_name as string;
+    case 'edit_contact': return d.contact_name as string;
+    default: return 'Unknown';
+  }
+}
+
+function getActionSummary(action: BraindumpAction): string {
+  const d = action.data;
+  switch (action.type) {
+    case 'add_contact': return `Add ${d.name}`;
+    case 'log_interaction': return `Log ${d.method} with ${d.contact_name}`;
+    case 'update_layer': return `Move ${d.contact_name} to ${d.new_intent}`;
+    case 'assign_circle': return `Add ${d.contact_name} to ${d.circle_name}`;
+    case 'edit_contact': return `Edit ${d.contact_name}`;
+    default: return 'Unknown action';
+  }
 }
