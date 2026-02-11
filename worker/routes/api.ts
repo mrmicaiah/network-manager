@@ -10,7 +10,7 @@
  *   /api/contacts/*      — CRUD, search, health recalculation
  *   /api/circles/*       — CRUD for contact circles, reordering
  *   /api/interactions/*  — Log and list interactions (with circle context)
- *   /api/braindump/*     — Parse natural language contact dumps
+ *   /api/braindump/*     — Parse and execute natural language commands
  *   /api/export/*        — CSV export with filters
  *   /api/import/*        — CSV import and bulk import flow
  *   /api/user/*          — Profile read/update, notification preferences, account deletion
@@ -74,7 +74,7 @@ import {
   handleWebhook,
   cancelAllSubscriptions,
 } from '../services/stripe-service';
-import { parseBraindump } from '../services/braindump-service';
+import { parseBraindump, executeBraindumpActions, type BraindumpAction } from '../services/braindump-service';
 import {
   getDashboardTabs,
   calculateDartboardData,
@@ -97,13 +97,6 @@ import type {
 // CORS Helper
 // ===========================================================================
 
-/**
- * Apply correct CORS headers to any response based on the request origin.
- *
- * This ensures every API response gets the right Access-Control-Allow-Origin
- * regardless of whether the individual handler passed the origin through.
- * Called at the router level so no handler can accidentally omit CORS headers.
- */
 function applyCorsHeaders(response: Response, origin: string | null): Response {
   const corsHeaders = getCorsHeaders(origin);
   const newResponse = new Response(response.body, response);
@@ -196,6 +189,8 @@ export async function handleApiRoute(
       response = await handleListInteractions(url, db, user.id);
     } else if (path === '/api/braindump/parse' && method === 'POST') {
       response = await handleBraindumpParse(request, env, user.id);
+    } else if (path === '/api/braindump/execute' && method === 'POST') {
+      response = await handleBraindumpExecute(request, env, user.id);
     } else if (path === '/api/export' && method === 'GET') {
       response = await handleExport(url, db, user.id);
     } else if (path.startsWith('/api/import/')) {
@@ -219,9 +214,6 @@ export async function handleApiRoute(
       response = await handleCheckout(request, env, auth.auth);
     } else if (path === '/api/subscription/portal' && method === 'POST') {
       response = await handlePortal(request, env, auth.auth);
-    // ---------------------------------------------------------------
-    // Google Contacts (authenticated routes — callback is in index.ts)
-    // ---------------------------------------------------------------
     } else if (path === '/api/auth/google/connect' && method === 'POST') {
       const { handleGoogleConnect } = await import('./google-auth');
       response = await handleGoogleConnect({ user, env, origin });
@@ -244,9 +236,6 @@ export async function handleApiRoute(
     response = errorResponse('Internal server error', 500);
   }
 
-  // Apply correct CORS headers to ALL responses at the router level.
-  // This guarantees the right Access-Control-Allow-Origin regardless of
-  // whether individual handlers passed the origin through.
   response = applyCorsHeaders(response, origin);
 
   if (auth.refreshedCookie) {
@@ -432,10 +421,6 @@ async function handleDeleteCircle(path: string, db: D1Database, userId: string):
   return jsonResponse({ data: { deleted: true } });
 }
 
-/**
- * Reorder circles by providing an array of circle IDs in desired order.
- * Also updates the user's circle_tab_order preference.
- */
 async function handleReorderCircles(request: Request, db: D1Database, userId: string): Promise<Response> {
   const body = await request.json<{ circleIds: string[] }>();
 
@@ -531,15 +516,24 @@ async function handleListInteractions(url: URL, db: D1Database, userId: string):
 }
 
 // ===========================================================================
-// Braindump Handler
+// Braindump Handlers
 // ===========================================================================
 
 async function handleBraindumpParse(request: Request, env: Env, userId: string): Promise<Response> {
   const body = await request.json<{ text: string }>();
   if (!body.text?.trim()) return errorResponse('Text content is required', 400);
-  const result = await parseBraindump(env, body.text);
+  const result = await parseBraindump(env, body.text, userId);
   if (!result.success) return errorResponse(result.error, 400);
   return jsonResponse({ data: result.data });
+}
+
+async function handleBraindumpExecute(request: Request, env: Env, userId: string): Promise<Response> {
+  const body = await request.json<{ actions: BraindumpAction[] }>();
+  if (!body.actions || !Array.isArray(body.actions) || body.actions.length === 0) {
+    return errorResponse('No actions to execute', 400);
+  }
+  const result = await executeBraindumpActions(env, userId, body.actions);
+  return jsonResponse({ data: result });
 }
 
 // ===========================================================================
@@ -560,7 +554,6 @@ async function handleExport(url: URL, db: D1Database, userId: string): Promise<R
   if (archived === 'true') filters.archived = true;
 
   const csv = await exportContacts(db, userId, filters);
-  // Note: CORS headers are applied at the router level via applyCorsHeaders()
   return new Response(csv, {
     status: 200,
     headers: {
