@@ -1,4 +1,30 @@
 import { useState, useEffect, useCallback } from 'react';
+import { API_URL } from '../config';
+
+/**
+ * Resolve a URL for API calls.
+ *
+ * In development, Vite's proxy handles /api/* → localhost:8787.
+ * In production, we need to prefix with the full worker URL
+ * because the dashboard (Pages) and worker are on different origins.
+ *
+ * Absolute URLs (https://...) are left unchanged.
+ * Relative URLs (/api/...) get the API_URL prefix in production.
+ */
+function resolveUrl(url: string): string {
+  // Already absolute
+  if (url.startsWith('http://') || url.startsWith('https://')) {
+    return url;
+  }
+
+  // In dev, Vite proxy handles /api/* — use relative URL
+  if (import.meta.env.DEV) {
+    return url;
+  }
+
+  // In production, prefix with worker URL
+  return `${API_URL}${url}`;
+}
 
 /**
  * Simple fetch wrapper with loading/error state.
@@ -6,14 +32,19 @@ import { useState, useEffect, useCallback } from 'react';
  * Supports conditional fetching by passing null as the URL.
  * When URL is null, the hook returns { data: null, isLoading: false }
  * without making a request.
+ *
+ * Relative URLs (e.g. '/api/contacts') are automatically resolved
+ * to the full worker URL in production.
  */
 export function useApi<T>(url: string | null, options?: RequestInit) {
   const [data, setData] = useState<T | null>(null);
   const [isLoading, setIsLoading] = useState(url !== null);
   const [error, setError] = useState<string | null>(null);
 
+  const resolvedUrl = url ? resolveUrl(url) : null;
+
   const fetchData = useCallback(async () => {
-    if (!url) {
+    if (!resolvedUrl) {
       setIsLoading(false);
       return;
     }
@@ -22,7 +53,7 @@ export function useApi<T>(url: string | null, options?: RequestInit) {
     setError(null);
 
     try {
-      const res = await fetch(url, {
+      const res = await fetch(resolvedUrl, {
         credentials: 'include',
         ...options,
       });
@@ -39,22 +70,25 @@ export function useApi<T>(url: string | null, options?: RequestInit) {
     } finally {
       setIsLoading(false);
     }
-  }, [url, JSON.stringify(options)]);
+  }, [resolvedUrl, JSON.stringify(options)]);
 
   useEffect(() => {
-    if (url) {
+    if (resolvedUrl) {
       fetchData();
     } else {
       setData(null);
       setIsLoading(false);
     }
-  }, [url, fetchData]);
+  }, [resolvedUrl, fetchData]);
 
   return { data, isLoading, error, refetch: fetchData };
 }
 
 /**
  * Lazy fetch — doesn't run on mount.
+ *
+ * Relative URLs are automatically resolved to the full worker URL
+ * in production.
  */
 export function useLazyApi<T>() {
   const [data, setData] = useState<T | null>(null);
@@ -62,11 +96,13 @@ export function useLazyApi<T>() {
   const [error, setError] = useState<string | null>(null);
 
   const execute = useCallback(async (url: string, options?: RequestInit) => {
+    const resolvedUrl = resolveUrl(url);
+
     setIsLoading(true);
     setError(null);
 
     try {
-      const res = await fetch(url, {
+      const res = await fetch(resolvedUrl, {
         credentials: 'include',
         ...options,
       });
