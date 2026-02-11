@@ -8,14 +8,15 @@
  *   - Manage circle membership
  *   - Edit contact details
  *
- * The braindump is the natural language interface to everything except settings.
+ * Supports refinement — users can submit corrections to update actions
+ * before executing them.
  *
  * @see dashboard/src/pages/BraindumpPage.tsx for the frontend
  * @see shared/models.ts for type definitions
  */
 
 import type { Env } from '../../shared/types';
-import type { IntentType, InteractionMethod, ContactSummary } from '../../shared/models';
+import type { IntentType, InteractionMethod } from '../../shared/models';
 
 // ===========================================================================
 // Configuration
@@ -28,10 +29,6 @@ const MAX_TOKENS = 4000;
 // Types — Action-Based Results
 // ===========================================================================
 
-/**
- * Every action the braindump can produce.
- * Each has a type, the parsed data, and a confidence level.
- */
 export type BraindumpAction =
   | AddContactAction
   | LogInteractionAction
@@ -58,7 +55,6 @@ export interface LogInteractionAction {
   type: 'log_interaction';
   data: {
     contact_name: string;
-    /** Set by the execute step after matching to an existing contact */
     contact_id?: string;
     date: string;
     method: InteractionMethod;
@@ -137,13 +133,38 @@ export interface ExecuteActionResult {
   action: BraindumpAction;
   success: boolean;
   message: string;
-  /** ID of created/updated resource */
   resourceId?: string;
 }
 
 export interface ExecuteResult {
   results: ExecuteActionResult[];
   summary: string;
+}
+
+// ===========================================================================
+// Context Fetching (shared between parse and refine)
+// ===========================================================================
+
+async function fetchUserContext(env: Env, userId: string) {
+  let existingContacts: Array<{ name: string; id: string; intent: string }> = [];
+  let existingCircles: Array<{ name: string; id: string }> = [];
+
+  try {
+    const [contactsResult, circlesResult] = await Promise.all([
+      env.DB.prepare(
+        `SELECT id, name, intent FROM contacts WHERE user_id = ? AND archived = 0 ORDER BY name`
+      ).bind(userId).all<{ id: string; name: string; intent: string }>(),
+      env.DB.prepare(
+        `SELECT id, name FROM circles WHERE user_id = ? ORDER BY sort_order`
+      ).bind(userId).all<{ id: string; name: string }>(),
+    ]);
+    existingContacts = contactsResult.results;
+    existingCircles = circlesResult.results;
+  } catch (err) {
+    console.error('[braindump] Failed to fetch context:', err);
+  }
+
+  return { existingContacts, existingCircles };
 }
 
 // ===========================================================================
@@ -223,7 +244,7 @@ When the user provides updated info about an existing contact:
 
 ## RULES
 
-1. Match names against existing contacts FIRST. Use fuzzy matching — "mom" might match "Susan Chen" if context suggests it, but don't guess. If unsure, treat as new.
+1. ALWAYS match names against existing contacts FIRST. Use fuzzy matching — "mom" might match "Susan Chen" if context suggests it, but don't guess. If unsure, treat as new.
 2. One message can produce MANY actions. "I called Mom yesterday and had coffee with my new friend Jake" = log_interaction(Mom) + add_contact(Jake) + log_interaction(Jake).
 3. Family keywords (mom, dad, sister, brother, wife, husband, etc.) → contact_kind: "kin" and suggest "Family" circle.
 4. Include reasoning for every action — brief explanation of why you chose this action type and values.
@@ -231,6 +252,7 @@ When the user provides updated info about an existing contact:
 6. For interactions, always try to determine the method (text/call/in_person/email/social/other) and date.
 7. If you can't parse something meaningful, put it in unresolved.
 8. Generate a brief, natural summary of all actions for the confirmation UI.
+9. NEVER create an add_contact action for someone who already exists in the contacts list. Instead, use log_interaction, update_layer, assign_circle, or edit_contact.
 
 ## OUTPUT FORMAT
 
@@ -250,15 +272,59 @@ Return ONLY valid JSON:
 }
 
 // ===========================================================================
+// Refine System Prompt
+// ===========================================================================
+
+function buildRefinePrompt(
+  existingContacts: Array<{ name: string; id: string; intent: string }>,
+  existingCircles: Array<{ name: string; id: string }>,
+): string {
+  const contactList = existingContacts.length > 0
+    ? existingContacts.map(c => `- "${c.name}" (id: ${c.id}, layer: ${c.intent})`).join('\n')
+    : '(no contacts yet)';
+
+  const circleList = existingCircles.length > 0
+    ? existingCircles.map(c => `- "${c.name}" (id: ${c.id})`).join('\n')
+    : '(no circles yet)';
+
+  return `You are refining a set of actions for Bethany Network Manager. The user was shown a list of proposed actions and is now giving corrections or additions.
+
+## EXISTING CONTACTS
+${contactList}
+
+## EXISTING CIRCLES
+${circleList}
+
+Your job: take the CURRENT ACTIONS and the user's CORRECTION, then return the COMPLETE updated action list. Apply the user's changes:
+- "Remove the one about Jake" → remove that action
+- "Actually Sarah is family" → modify the add_contact or add an edit_contact with contact_kind: "kin"  
+- "Change Jake to nurture instead" → update the relevant action's intent
+- "Don't add Mike, I already have him" → remove the add_contact, keep other actions for Mike
+- "Also log that I called Lisa yesterday" → add a new log_interaction action
+- "Sarah's phone is 555-1234" → add an edit_contact or modify add_contact to include phone
+
+Return the FULL updated list of actions (not just the changes). Include all actions that should still happen.
+
+Use the same action types and format:
+- add_contact, log_interaction, update_layer, assign_circle, edit_contact
+- Each with type, data, confidence, reasoning
+
+## DUNBAR LAYERS
+- inner_circle, nurture, maintain, transactional, dormant, new
+
+## OUTPUT FORMAT
+Return ONLY valid JSON:
+{
+  "actions": [ ... ],
+  "summary": "Updated summary reflecting changes",
+  "unresolved": []
+}`;
+}
+
+// ===========================================================================
 // Main Parse Function
 // ===========================================================================
 
-/**
- * Parse free-form text into structured actions.
- *
- * Fetches the user's existing contacts and circles first so the AI
- * can match names and avoid duplicates.
- */
 export async function parseBraindump(
   env: Env,
   text: string,
@@ -268,26 +334,9 @@ export async function parseBraindump(
     return { success: false, error: 'No text provided to parse' };
   }
 
-  // Fetch existing contacts and circles for context
-  let existingContacts: Array<{ name: string; id: string; intent: string }> = [];
-  let existingCircles: Array<{ name: string; id: string }> = [];
-
-  if (userId) {
-    try {
-      const [contactsResult, circlesResult] = await Promise.all([
-        env.DB.prepare(
-          `SELECT id, name, intent FROM contacts WHERE user_id = ? AND archived = 0 ORDER BY name`
-        ).bind(userId).all<{ id: string; name: string; intent: string }>(),
-        env.DB.prepare(
-          `SELECT id, name FROM circles WHERE user_id = ? ORDER BY sort_order`
-        ).bind(userId).all<{ id: string; name: string }>(),
-      ]);
-      existingContacts = contactsResult.results;
-      existingCircles = circlesResult.results;
-    } catch (err) {
-      console.error('[braindump] Failed to fetch context:', err);
-    }
-  }
+  const { existingContacts, existingCircles } = userId
+    ? await fetchUserContext(env, userId)
+    : { existingContacts: [], existingCircles: [] };
 
   const systemPrompt = buildSystemPrompt(existingContacts, existingCircles);
 
@@ -331,7 +380,6 @@ export async function parseBraindump(
     }
 
     const validated = validateActions(parsed, existingContacts, existingCircles);
-
     return { success: true, data: validated };
   } catch (err) {
     console.error('[braindump] Unexpected error:', err);
@@ -340,19 +388,85 @@ export async function parseBraindump(
 }
 
 // ===========================================================================
-// Execute Actions
+// Refine Function
 // ===========================================================================
 
 /**
- * Execute a list of braindump actions against the database.
+ * Refine existing actions based on user corrections.
  *
- * Actions are executed in dependency order:
- *   1. add_contact (so new contacts exist for subsequent actions)
- *   2. edit_contact
- *   3. update_layer
- *   4. assign_circle (may create circles)
- *   5. log_interaction
+ * Takes the current action list and a natural language correction,
+ * sends both to the AI, and gets back an updated action list.
  */
+export async function refineBraindump(
+  env: Env,
+  userId: string,
+  currentActions: BraindumpAction[],
+  correction: string,
+): Promise<BraindumpResult> {
+  if (!correction.trim()) {
+    return { success: false, error: 'No correction provided' };
+  }
+
+  const { existingContacts, existingCircles } = await fetchUserContext(env, userId);
+  const systemPrompt = buildRefinePrompt(existingContacts, existingCircles);
+
+  const userMessage = `## CURRENT ACTIONS
+${JSON.stringify(currentActions, null, 2)}
+
+## USER'S CORRECTION
+${correction}`;
+
+  try {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: PARSING_MODEL,
+        max_tokens: MAX_TOKENS,
+        system: systemPrompt,
+        messages: [{ role: 'user', content: userMessage }],
+      }),
+    });
+
+    if (!response.ok) {
+      const errorBody = await response.text();
+      console.error(`[braindump] Refine API error: ${response.status} — ${errorBody}`);
+      return { success: false, error: 'Failed to process correction. Please try again.' };
+    }
+
+    const data = await response.json() as {
+      content: Array<{ type: string; text?: string }>;
+    };
+
+    const textBlock = data.content.find(b => b.type === 'text');
+    const responseText = textBlock?.text?.trim();
+
+    if (!responseText) {
+      return { success: false, error: 'No response from AI. Please try again.' };
+    }
+
+    const parsed = parseJsonResponse(responseText);
+    if (!parsed) {
+      console.error('[braindump] Failed to parse refine JSON:', responseText);
+      return { success: false, error: 'Failed to parse the AI response. Please try again.' };
+    }
+
+    const validated = validateActions(parsed, existingContacts, existingCircles);
+    return { success: true, data: validated };
+  } catch (err) {
+    console.error('[braindump] Refine error:', err);
+    return { success: false, error: 'An unexpected error occurred. Please try again.' };
+  }
+}
+
+// ===========================================================================
+// Execute Actions
+// ===========================================================================
+
 export async function executeBraindumpActions(
   env: Env,
   userId: string,
@@ -363,10 +477,8 @@ export async function executeBraindumpActions(
   const { createCircle, listCirclesWithCounts } = await import('./circle-service');
 
   const results: ExecuteActionResult[] = [];
-  /** Map of contact_name → contact_id for linking actions */
   const nameToIdMap = new Map<string, string>();
 
-  // Pre-populate with existing contacts
   const { results: existing } = await env.DB.prepare(
     `SELECT id, name FROM contacts WHERE user_id = ? AND archived = 0`
   ).bind(userId).all<{ id: string; name: string }>();
@@ -374,7 +486,6 @@ export async function executeBraindumpActions(
     nameToIdMap.set(c.name.toLowerCase(), c.id);
   }
 
-  // Sort actions by execution order
   const ordered = sortActionsByDependency(actions);
 
   for (const action of ordered) {
@@ -385,7 +496,6 @@ export async function executeBraindumpActions(
       );
       results.push(result);
 
-      // Track new contact IDs
       if (action.type === 'add_contact' && result.success && result.resourceId) {
         nameToIdMap.set(action.data.name.toLowerCase(), result.resourceId);
       }
@@ -435,150 +545,60 @@ async function executeAction(
         notes: action.data.notes,
         source: 'braindump',
       });
-      return {
-        action,
-        success: true,
-        message: `Added ${contact.name}`,
-        resourceId: contact.id,
-      };
+      return { action, success: true, message: `Added ${contact.name}`, resourceId: contact.id };
     }
 
     case 'log_interaction': {
-      const contactId = action.data.contact_id
-        ?? nameToIdMap.get(action.data.contact_name.toLowerCase());
-
+      const contactId = action.data.contact_id ?? nameToIdMap.get(action.data.contact_name.toLowerCase());
       if (!contactId) {
-        return {
-          action,
-          success: false,
-          message: `Couldn't find contact "${action.data.contact_name}" to log interaction`,
-        };
+        return { action, success: false, message: `Couldn't find contact "${action.data.contact_name}" to log interaction` };
       }
-
       const interaction = await services.logInteraction(db, userId, {
-        contact_id: contactId,
-        method: action.data.method,
-        date: action.data.date,
-        summary: action.data.summary,
-        logged_via: 'braindump',
+        contact_id: contactId, method: action.data.method, date: action.data.date,
+        summary: action.data.summary, logged_via: 'braindump',
       });
-
       return {
-        action,
-        success: !!interaction,
-        message: interaction
-          ? `Logged ${action.data.method} with ${action.data.contact_name}`
-          : `Failed to log interaction with ${action.data.contact_name}`,
+        action, success: !!interaction,
+        message: interaction ? `Logged ${action.data.method} with ${action.data.contact_name}` : `Failed to log interaction`,
         resourceId: interaction?.id,
       };
     }
 
     case 'update_layer': {
-      const contactId = action.data.contact_id
-        ?? nameToIdMap.get(action.data.contact_name.toLowerCase());
-
-      if (!contactId) {
-        return {
-          action,
-          success: false,
-          message: `Couldn't find contact "${action.data.contact_name}" to update layer`,
-        };
-      }
-
-      const updated = await services.updateContact(db, userId, contactId, {
-        intent: action.data.new_intent,
-      });
-
-      return {
-        action,
-        success: !!updated,
-        message: updated
-          ? `Moved ${action.data.contact_name} to ${action.data.new_intent}`
-          : `Failed to update ${action.data.contact_name}`,
-      };
+      const contactId = action.data.contact_id ?? nameToIdMap.get(action.data.contact_name.toLowerCase());
+      if (!contactId) return { action, success: false, message: `Couldn't find "${action.data.contact_name}"` };
+      const updated = await services.updateContact(db, userId, contactId, { intent: action.data.new_intent });
+      return { action, success: !!updated, message: updated ? `Moved ${action.data.contact_name} to ${action.data.new_intent}` : `Failed` };
     }
 
     case 'assign_circle': {
-      const contactId = action.data.contact_id
-        ?? nameToIdMap.get(action.data.contact_name.toLowerCase());
-
-      if (!contactId) {
-        return {
-          action,
-          success: false,
-          message: `Couldn't find contact "${action.data.contact_name}" for circle assignment`,
-        };
-      }
+      const contactId = action.data.contact_id ?? nameToIdMap.get(action.data.contact_name.toLowerCase());
+      if (!contactId) return { action, success: false, message: `Couldn't find "${action.data.contact_name}"` };
 
       let circleId = action.data.circle_id;
-
-      // Create circle if needed
       if (!circleId && action.data.create_circle) {
-        const circle = await services.createCircle(db, userId, {
-          name: action.data.circle_name,
-          default_cadence_days: null,
-        });
+        const circle = await services.createCircle(db, userId, { name: action.data.circle_name, default_cadence_days: null });
         circleId = circle.id;
       }
-
-      // Find existing circle by name if no ID
       if (!circleId) {
-        const circle = await db.prepare(
-          `SELECT id FROM circles WHERE user_id = ? AND name = ? COLLATE NOCASE`
-        ).bind(userId, action.data.circle_name).first<{ id: string }>();
+        const circle = await db.prepare(`SELECT id FROM circles WHERE user_id = ? AND name = ? COLLATE NOCASE`).bind(userId, action.data.circle_name).first<{ id: string }>();
         circleId = circle?.id;
       }
+      if (!circleId) return { action, success: false, message: `Circle "${action.data.circle_name}" not found` };
 
-      if (!circleId) {
-        return {
-          action,
-          success: false,
-          message: `Circle "${action.data.circle_name}" not found`,
-        };
-      }
-
-      // Add to circle (ignore if already linked)
-      await db.prepare(
-        `INSERT OR IGNORE INTO contact_circles (contact_id, circle_id, added_at)
-         VALUES (?, ?, datetime('now'))`
-      ).bind(contactId, circleId).run();
-
-      return {
-        action,
-        success: true,
-        message: `Added ${action.data.contact_name} to ${action.data.circle_name}`,
-      };
+      await db.prepare(`INSERT OR IGNORE INTO contact_circles (contact_id, circle_id, added_at) VALUES (?, ?, datetime('now'))`).bind(contactId, circleId).run();
+      return { action, success: true, message: `Added ${action.data.contact_name} to ${action.data.circle_name}` };
     }
 
     case 'edit_contact': {
-      const contactId = action.data.contact_id
-        ?? nameToIdMap.get(action.data.contact_name.toLowerCase());
-
-      if (!contactId) {
-        return {
-          action,
-          success: false,
-          message: `Couldn't find contact "${action.data.contact_name}" to edit`,
-        };
-      }
-
+      const contactId = action.data.contact_id ?? nameToIdMap.get(action.data.contact_name.toLowerCase());
+      if (!contactId) return { action, success: false, message: `Couldn't find "${action.data.contact_name}"` };
       const updated = await services.updateContact(db, userId, contactId, action.data.updates);
-
-      return {
-        action,
-        success: !!updated,
-        message: updated
-          ? `Updated ${action.data.contact_name}`
-          : `Failed to update ${action.data.contact_name}`,
-      };
+      return { action, success: !!updated, message: updated ? `Updated ${action.data.contact_name}` : `Failed` };
     }
 
     default:
-      return {
-        action,
-        success: false,
-        message: `Unknown action type`,
-      };
+      return { action, success: false, message: `Unknown action type` };
   }
 }
 
@@ -587,13 +607,7 @@ async function executeAction(
 // ===========================================================================
 
 function sortActionsByDependency(actions: BraindumpAction[]): BraindumpAction[] {
-  const order: Record<string, number> = {
-    add_contact: 0,
-    edit_contact: 1,
-    update_layer: 2,
-    assign_circle: 3,
-    log_interaction: 4,
-  };
+  const order: Record<string, number> = { add_contact: 0, edit_contact: 1, update_layer: 2, assign_circle: 3, log_interaction: 4 };
   return [...actions].sort((a, b) => (order[a.type] ?? 99) - (order[b.type] ?? 99));
 }
 
@@ -601,11 +615,7 @@ function parseJsonResponse(text: string): unknown | null {
   let cleaned = text.replace(/```json\n?|```\n?/g, '').trim();
   const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
   if (jsonMatch) cleaned = jsonMatch[0];
-  try {
-    return JSON.parse(cleaned);
-  } catch {
-    return null;
-  }
+  try { return JSON.parse(cleaned); } catch { return null; }
 }
 
 // ===========================================================================
@@ -621,7 +631,6 @@ function validateActions(
   existingCircles: Array<{ name: string; id: string }>,
 ): BraindumpParseResult {
   const result: BraindumpParseResult = { actions: [], summary: '', unresolved: [] };
-
   if (!parsed || typeof parsed !== 'object') return result;
   const obj = parsed as Record<string, unknown>;
 
@@ -639,7 +648,6 @@ function validateActions(
     const data = a.data as Record<string, unknown> | undefined;
     const confidence = (['high', 'medium', 'low'].includes(a.confidence as string) ? a.confidence : 'medium') as 'high' | 'medium' | 'low';
     const reasoning = typeof a.reasoning === 'string' ? a.reasoning : '';
-
     if (!data) continue;
 
     switch (type) {
@@ -647,7 +655,7 @@ function validateActions(
         const name = typeof data.name === 'string' ? data.name.trim() : '';
         if (!name) continue;
         result.actions.push({
-          type: 'add_contact',
+          type: 'add_contact', confidence, reasoning,
           data: {
             name,
             phone: typeof data.phone === 'string' ? data.phone.trim() || undefined : undefined,
@@ -657,18 +665,15 @@ function validateActions(
             contact_kind: data.contact_kind === 'kin' ? 'kin' : data.contact_kind === 'non_kin' ? 'non_kin' : undefined,
             notes: typeof data.notes === 'string' ? data.notes.trim() || undefined : undefined,
           },
-          confidence,
-          reasoning,
         });
         break;
       }
       case 'log_interaction': {
         const contactName = typeof data.contact_name === 'string' ? data.contact_name.trim() : '';
         if (!contactName) continue;
-        // Try to resolve contact_id
         const match = existingContacts.find(c => c.name.toLowerCase() === contactName.toLowerCase());
         result.actions.push({
-          type: 'log_interaction',
+          type: 'log_interaction', confidence, reasoning,
           data: {
             contact_name: contactName,
             contact_id: match?.id ?? (typeof data.contact_id === 'string' ? data.contact_id : undefined),
@@ -676,8 +681,6 @@ function validateActions(
             method: VALID_METHODS.includes(data.method as InteractionMethod) ? data.method as InteractionMethod : 'other',
             summary: typeof data.summary === 'string' ? data.summary.trim() : '',
           },
-          confidence,
-          reasoning,
         });
         break;
       }
@@ -687,15 +690,13 @@ function validateActions(
         if (!contactName || !VALID_INTENTS.includes(newIntent)) continue;
         const match = existingContacts.find(c => c.name.toLowerCase() === contactName.toLowerCase());
         result.actions.push({
-          type: 'update_layer',
+          type: 'update_layer', confidence, reasoning,
           data: {
             contact_name: contactName,
             contact_id: match?.id ?? (typeof data.contact_id === 'string' ? data.contact_id : undefined),
             new_intent: newIntent,
             current_intent: match?.intent as IntentType ?? undefined,
           },
-          confidence,
-          reasoning,
         });
         break;
       }
@@ -706,16 +707,12 @@ function validateActions(
         const contactMatch = existingContacts.find(c => c.name.toLowerCase() === contactName.toLowerCase());
         const circleMatch = existingCircles.find(c => c.name.toLowerCase() === circleName.toLowerCase());
         result.actions.push({
-          type: 'assign_circle',
+          type: 'assign_circle', confidence, reasoning,
           data: {
-            contact_name: contactName,
-            contact_id: contactMatch?.id,
-            circle_name: circleName,
-            circle_id: circleMatch?.id,
+            contact_name: contactName, contact_id: contactMatch?.id,
+            circle_name: circleName, circle_id: circleMatch?.id,
             create_circle: !circleMatch,
           },
-          confidence,
-          reasoning,
         });
         break;
       }
@@ -726,10 +723,9 @@ function validateActions(
         const updates = data.updates as Record<string, unknown> | undefined;
         if (!updates || Object.keys(updates).length === 0) continue;
         result.actions.push({
-          type: 'edit_contact',
+          type: 'edit_contact', confidence, reasoning,
           data: {
-            contact_name: contactName,
-            contact_id: match?.id,
+            contact_name: contactName, contact_id: match?.id,
             updates: {
               name: typeof updates.name === 'string' ? updates.name.trim() || undefined : undefined,
               phone: typeof updates.phone === 'string' ? updates.phone.trim() || undefined : undefined,
@@ -739,8 +735,6 @@ function validateActions(
               preferred_method: VALID_METHODS.includes(updates.preferred_method as InteractionMethod) ? updates.preferred_method as InteractionMethod : undefined,
             },
           },
-          confidence,
-          reasoning,
         });
         break;
       }
