@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { CheckCircle } from 'lucide-react';
@@ -30,15 +30,17 @@ export function LoginPage() {
   const [resendCountdown, setResendCountdown] = useState(RESEND_COOLDOWN);
 
   // Check for welcome query param (from signup redirect)
-  const searchParams = new URLSearchParams(location.search);
+  const searchParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
   const isWelcome = searchParams.get('welcome') === 'true';
 
-  // Redirect if already authenticated
-  if (isAuthenticated) {
-    const from = (location.state as { from?: { pathname: string } })?.from?.pathname || '/';
-    navigate(from, { replace: true });
-    return null;
-  }
+  // Redirect if already authenticated — must be in useEffect to avoid
+  // breaking rules of hooks (no early returns before hooks)
+  useEffect(() => {
+    if (isAuthenticated) {
+      const from = (location.state as { from?: { pathname: string } })?.from?.pathname || '/';
+      navigate(from, { replace: true });
+    }
+  }, [isAuthenticated, navigate, location.state]);
 
   // Resend countdown timer
   useEffect(() => {
@@ -161,6 +163,11 @@ export function LoginPage() {
       prevPhoneLength.current = formatted.length;
     }
   };
+
+  // Don't render the login form while redirecting
+  if (isAuthenticated) {
+    return null;
+  }
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-cream px-4">
