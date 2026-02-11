@@ -36,6 +36,7 @@ import {
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { TabSettings } from '../components/TabSettings';
+import { GoogleContactsCard } from '../components/GoogleContactsCard';
 
 // ===========================================================================
 // Types
@@ -109,6 +110,7 @@ const FEATURE_COMPARISON = [
   { feature: 'Custom circles', free: '✓', premium: '✓' },
   { feature: 'CSV export', free: '✓', premium: '✓' },
   { feature: 'CSV import', free: '—', premium: '✓' },
+  { feature: 'Google Contacts sync', free: '—', premium: '✓' },
   { feature: 'Dunbar insights', free: '—', premium: '✓' },
   { feature: 'Priority support', free: '—', premium: '✓' },
 ];
@@ -164,8 +166,15 @@ export function SettingsPage() {
   const [isDeletingAccount, setIsDeletingAccount] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
-  // Section collapse state
-  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set(['subscription', 'profile']));
+  // Section collapse state — auto-expand integrations if returning from OAuth
+  const [expandedSections, setExpandedSections] = useState<Set<string>>(() => {
+    const initial = new Set(['subscription', 'profile']);
+    const params = new URLSearchParams(window.location.search);
+    if (params.has('google')) {
+      initial.add('integrations');
+    }
+    return initial;
+  });
 
   // Logout state
   const [isLoggingOut, setIsLoggingOut] = useState(false);
@@ -957,6 +966,33 @@ export function SettingsPage() {
         </div>
       </CollapsibleSection>
 
+      {/* Integrations Card */}
+      <CollapsibleSection
+        title="Integrations"
+        icon={<LinkIcon className="w-5 h-5" />}
+        isExpanded={expandedSections.has('integrations')}
+        onToggle={() => toggleSection('integrations')}
+      >
+        <div className="p-5 space-y-4">
+          {/* Google Contacts — fully functional */}
+          <GoogleContactsCard />
+
+          {/* Calendar — coming soon */}
+          <div className="flex items-center justify-between p-3 bg-cream rounded-xl">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-warm-white rounded-xl flex items-center justify-center border border-cream-dark">
+                <Calendar className="w-5 h-5 text-charcoal-light" />
+              </div>
+              <div>
+                <p className="font-medium text-charcoal">Calendar</p>
+                <p className="text-sm text-charcoal-light">Schedule meetups with contacts</p>
+              </div>
+            </div>
+            <span className="badge-neutral">Coming soon</span>
+          </div>
+        </div>
+      </CollapsibleSection>
+
       {/* Security Card */}
       <CollapsibleSection
         title="Security"
@@ -1014,44 +1050,6 @@ export function SettingsPage() {
               <Trash2 className="w-4 h-4" />
               Delete my account
             </button>
-          </div>
-        </div>
-      </CollapsibleSection>
-
-      {/* Integrations Card */}
-      <CollapsibleSection
-        title="Integrations"
-        icon={<LinkIcon className="w-5 h-5" />}
-        isExpanded={expandedSections.has('integrations')}
-        onToggle={() => toggleSection('integrations')}
-      >
-        <div className="p-5 space-y-4">
-          <div className="flex items-center justify-between p-3 bg-cream rounded-xl">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-warm-white rounded-xl flex items-center justify-center border border-cream-dark">
-                <svg className="w-6 h-6" viewBox="0 0 24 24" fill="none">
-                  <path d="M22 12c0-5.523-4.477-10-10-10S2 6.477 2 12c0 4.99 3.657 9.128 8.438 9.878v-6.988h-2.54V12h2.54V9.797c0-2.506 1.492-3.89 3.777-3.89 1.094 0 2.238.195 2.238.195v2.46h-1.26c-1.243 0-1.63.771-1.63 1.562V12h2.773l-.443 2.89h-2.33v6.988C18.343 21.128 22 16.99 22 12z" fill="#1877F2"/>
-                </svg>
-              </div>
-              <div>
-                <p className="font-medium text-charcoal">Google Contacts</p>
-                <p className="text-sm text-charcoal-light">Sync your contacts automatically</p>
-              </div>
-            </div>
-            <span className="badge-neutral">Coming soon</span>
-          </div>
-
-          <div className="flex items-center justify-between p-3 bg-cream rounded-xl">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-warm-white rounded-xl flex items-center justify-center border border-cream-dark">
-                <Calendar className="w-5 h-5 text-charcoal-light" />
-              </div>
-              <div>
-                <p className="font-medium text-charcoal">Calendar</p>
-                <p className="text-sm text-charcoal-light">Schedule meetups with contacts</p>
-              </div>
-            </div>
-            <span className="badge-neutral">Coming soon</span>
           </div>
         </div>
       </CollapsibleSection>
