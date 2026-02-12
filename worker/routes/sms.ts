@@ -28,11 +28,10 @@
  *   which uses Claude Haiku for intent classification and dispatches to
  *   appropriate sub-handlers. Responses are sent back via SendBlue.
  *
- * PENDING CONTEXT FIX (2026-02-11):
- *   Multi-turn conversations now work correctly. When Bethany asks a
- *   clarifying question, the pending context is saved to the users table
- *   and loaded on the next message. This prevents the "I'm not sure what
- *   you're asking" loop that occurred when context was lost.
+ * MULTI-TURN CONTEXT (2026-02-11):
+ *   Pending context is now persisted to the users.pending_context column.
+ *   This allows Bethany to handle follow-up messages correctly when she
+ *   asks clarifying questions or presents options.
  */
 
 import type { Env } from '../../shared/types';
@@ -223,82 +222,56 @@ export async function routeInboundMessage(
 }
 
 // ---------------------------------------------------------------------------
-// Pending Context Storage
+// Pending Context Helpers
 // ---------------------------------------------------------------------------
+
+const PENDING_CONTEXT_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 /**
  * Load pending context from the user's record.
- * Returns null if no context exists or if it's expired.
+ * Returns null if no context, expired, or invalid.
  */
-async function loadPendingContext(
-  db: D1Database,
-  userId: string,
-): Promise<PendingContext | null> {
+function loadPendingContext(user: UserRow): PendingContext | null {
+  if (!user.pending_context) {
+    return null;
+  }
+
   try {
-    const result = await db
-      .prepare('SELECT pending_context FROM users WHERE id = ?')
-      .bind(userId)
-      .first<{ pending_context: string | null }>();
+    const ctx = JSON.parse(user.pending_context) as PendingContext;
 
-    if (!result?.pending_context) {
+    // Check if expired
+    const createdAt = new Date(ctx.createdAt).getTime();
+    if (Date.now() - createdAt > PENDING_CONTEXT_TTL_MS) {
+      console.log(`[sms] Pending context expired for user ${user.id}`);
       return null;
     }
 
-    const context = JSON.parse(result.pending_context) as PendingContext;
-
-    // Check if context is expired (5 minutes)
-    const createdAt = new Date(context.createdAt).getTime();
-    const now = Date.now();
-    if (now - createdAt > 5 * 60 * 1000) {
-      console.log(`[sms] Pending context expired for user ${userId}`);
-      // Clear the expired context
-      await clearPendingContext(db, userId);
-      return null;
-    }
-
-    console.log(`[sms] Loaded pending context for user ${userId}: ${context.type}`);
-    return context;
+    return ctx;
   } catch (err) {
-    console.error(`[sms] Error loading pending context for ${userId}:`, err);
+    console.error(`[sms] Failed to parse pending_context for user ${user.id}:`, err);
     return null;
   }
 }
 
 /**
  * Save pending context to the user's record.
+ * Pass null to clear the context.
  */
 async function savePendingContext(
   db: D1Database,
   userId: string,
-  context: PendingContext,
+  context: PendingContext | null | undefined,
 ): Promise<void> {
-  try {
-    const contextJson = JSON.stringify(context);
-    await db
-      .prepare('UPDATE users SET pending_context = ?, updated_at = datetime(\'now\') WHERE id = ?')
-      .bind(contextJson, userId)
-      .run();
-    console.log(`[sms] Saved pending context for user ${userId}: ${context.type}`);
-  } catch (err) {
-    console.error(`[sms] Error saving pending context for ${userId}:`, err);
-  }
-}
+  const value = context ? JSON.stringify(context) : null;
 
-/**
- * Clear pending context from the user's record.
- */
-async function clearPendingContext(
-  db: D1Database,
-  userId: string,
-): Promise<void> {
   try {
-    await db
-      .prepare('UPDATE users SET pending_context = NULL, updated_at = datetime(\'now\') WHERE id = ?')
-      .bind(userId)
-      .run();
-    console.log(`[sms] Cleared pending context for user ${userId}`);
+    await db.prepare(
+      `UPDATE users SET pending_context = ?, updated_at = datetime('now') WHERE id = ?`
+    ).bind(value, userId).run();
+
+    console.log(`[sms] ${context ? 'Saved' : 'Cleared'} pending context for user ${userId}`);
   } catch (err) {
-    console.error(`[sms] Error clearing pending context for ${userId}:`, err);
+    console.error(`[sms] Failed to save pending_context for user ${userId}:`, err);
   }
 }
 
@@ -416,8 +389,15 @@ export async function handleSmsWebhook(
             // (TASK-b3480875-7)
             console.log(`[sms] → conversation router for ${decision.user.name}`);
             try {
-              // Load pending context from user record
-              const pendingContext = await loadPendingContext(env.DB, decision.user.id);
+              // Load pending context from the user's record
+              const pendingContext = loadPendingContext(decision.user);
+
+              if (pendingContext) {
+                console.log(
+                  `[sms] Loaded pending context: type=${pendingContext.type}, ` +
+                  `originalIntent=${pendingContext.originalIntent}`
+                );
+              }
 
               const response = await routeConversation(
                 decision.message,
@@ -431,15 +411,21 @@ export async function handleSmsWebhook(
 
               // Save or clear pending context based on response
               if (response.expectsReply && response.pendingContext) {
-                await savePendingContext(env.DB, decision.user.id, response.pendingContext);
+                await savePendingContext(
+                  env.DB,
+                  decision.user.id,
+                  response.pendingContext,
+                );
               } else {
-                // Clear any existing context when conversation completes
-                await clearPendingContext(env.DB, decision.user.id);
+                // Clear any existing pending context
+                if (decision.user.pending_context) {
+                  await savePendingContext(env.DB, decision.user.id, null);
+                }
               }
 
               console.log(
                 `[sms] ← conversation response sent to ${decision.user.name} ` +
-                `(expectsReply: ${response.expectsReply}, hasContext: ${!!response.pendingContext})`
+                `(expectsReply: ${response.expectsReply})`
               );
             } catch (err) {
               console.error(`[sms] Conversation error for ${decision.user.phone}:`, err);
