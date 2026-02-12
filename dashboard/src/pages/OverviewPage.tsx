@@ -5,7 +5,7 @@ import { useApi } from '../hooks/useApi';
 import { Dartboard } from '../components/Dartboard';
 import { UnsortedTab } from '../components/UnsortedTab';
 import { CircleSummary, CircleSummaryBadge } from '../components/CircleSummary';
-import { Inbox, Plus, Settings, ChevronRight } from 'lucide-react';
+import { Inbox, Plus, Settings, ChevronRight, Sparkles, X } from 'lucide-react';
 
 // ===========================================================================
 // Types
@@ -66,6 +66,40 @@ interface DartboardResponse {
   };
 }
 
+interface ReviewStatsResponse {
+  contacts: {
+    total_unsorted: number;
+    pending: number;
+    reviewed: number;
+  };
+}
+
+// ===========================================================================
+// Local Storage Key for Banner Dismissal
+// ===========================================================================
+
+const BANNER_DISMISS_KEY = 'bethany_review_banner_dismissed';
+const BANNER_DISMISS_DURATION = 24 * 60 * 60 * 1000; // 24 hours
+
+function isBannerDismissed(): boolean {
+  try {
+    const dismissed = localStorage.getItem(BANNER_DISMISS_KEY);
+    if (!dismissed) return false;
+    const timestamp = parseInt(dismissed, 10);
+    return Date.now() - timestamp < BANNER_DISMISS_DURATION;
+  } catch {
+    return false;
+  }
+}
+
+function dismissBanner(): void {
+  try {
+    localStorage.setItem(BANNER_DISMISS_KEY, Date.now().toString());
+  } catch {
+    // Ignore storage errors
+  }
+}
+
 // ===========================================================================
 // Component
 // ===========================================================================
@@ -74,11 +108,16 @@ export function OverviewPage() {
   const { user } = useAuth();
   const [activeTab, setActiveTab] = useState<string | null>(null);
   const [unsortedCount, setUnsortedCount] = useState(0);
+  const [bannerDismissed, setBannerDismissed] = useState(() => isBannerDismissed());
 
   // Fetch tabs
   const { data: tabsData, isLoading: tabsLoading, refetch: refetchTabs } = useApi<DashboardTabsResponse>(
     '/api/dashboard/tabs'
   );
+
+  // Fetch review stats for banner
+  const { data: reviewStats } = useApi<ReviewStatsResponse>('/api/review/stats');
+  const pendingReviewCount = reviewStats?.contacts?.pending ?? 0;
 
   // Set initial active tab
   useEffect(() => {
@@ -145,8 +184,25 @@ export function OverviewPage() {
     });
   }, [refetchTabs]);
 
+  // Handle banner dismissal
+  const handleDismissBanner = () => {
+    dismissBanner();
+    setBannerDismissed(true);
+  };
+
+  // Show review banner if there are pending contacts and not dismissed
+  const showReviewBanner = pendingReviewCount >= 5 && !bannerDismissed;
+
   return (
     <div className="space-y-6">
+      {/* Review Banner */}
+      {showReviewBanner && (
+        <ReviewBanner
+          count={pendingReviewCount}
+          onDismiss={handleDismissBanner}
+        />
+      )}
+
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
@@ -239,6 +295,51 @@ export function OverviewPage() {
       ) : tabs.length === 0 ? (
         <EmptyState />
       ) : null}
+    </div>
+  );
+}
+
+// ===========================================================================
+// Review Banner
+// ===========================================================================
+
+function ReviewBanner({ count, onDismiss }: { count: number; onDismiss: () => void }) {
+  return (
+    <div className="relative bg-gradient-to-r from-terracotta/10 via-blush/30 to-terracotta/10 rounded-2xl border border-terracotta/20 p-4 sm:p-5">
+      {/* Dismiss button */}
+      <button
+        onClick={onDismiss}
+        className="absolute top-3 right-3 p-1.5 text-charcoal-light hover:text-charcoal rounded-lg hover:bg-warm-white/50 transition-colors"
+        title="Dismiss for 24 hours"
+      >
+        <X className="w-4 h-4" />
+      </button>
+
+      <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+        {/* Icon */}
+        <div className="w-12 h-12 bg-warm-white rounded-xl flex items-center justify-center shadow-soft flex-shrink-0">
+          <Sparkles className="w-6 h-6 text-terracotta" />
+        </div>
+
+        {/* Content */}
+        <div className="flex-1 min-w-0">
+          <h3 className="font-display font-medium text-charcoal mb-1">
+            You have {count} contacts to sort
+          </h3>
+          <p className="text-sm text-charcoal-light">
+            I've analyzed your network and have some suggestions. Let's organize them together!
+          </p>
+        </div>
+
+        {/* CTA */}
+        <Link
+          to="/review"
+          className="btn-primary flex-shrink-0 self-start sm:self-center"
+        >
+          Review contacts
+          <ChevronRight className="w-4 h-4" />
+        </Link>
+      </div>
     </div>
   );
 }
