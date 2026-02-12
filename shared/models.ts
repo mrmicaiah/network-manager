@@ -226,6 +226,17 @@ export type NudgeStatus = 'pending' | 'delivered' | 'dismissed' | 'acted_on';
  */
 export type ScoreStatus = 'thriving' | 'healthy' | 'slipping' | 'drifting';
 
+/**
+ * Pending context type — what kind of follow-up we're expecting.
+ * Used in multi-turn SMS conversations when Bethany asks a clarifying question.
+ */
+export type PendingContextType =
+  | 'clarify_intent'
+  | 'confirm_action'
+  | 'select_contact'
+  | 'select_option'
+  | 'intent_assignment';
+
 // ===========================================================================
 // Core Models — D1 Row Types
 // ===========================================================================
@@ -260,6 +271,13 @@ export interface UserRow {
   nudge_frequency: NudgeFrequency;
   quiet_hours_start: string | null;
   quiet_hours_end: string | null;
+  /**
+   * Pending conversation context — stores multi-turn state between SMS messages.
+   * JSON blob containing type, originalIntent, data, and createdAt.
+   * Expires after 5 minutes (enforced in application code).
+   * null = no pending context.
+   */
+  pending_context: string | null;
   created_at: string;            // ISO timestamp
   updated_at: string;            // ISO timestamp
 }
