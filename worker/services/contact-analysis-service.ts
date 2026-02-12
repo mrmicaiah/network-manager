@@ -56,6 +56,9 @@ const FREQUENCY_THRESHOLDS = {
   low: 1,
 } as const;
 
+/** Max bind parameters for D1 queries (leaving margin for safety) */
+const MAX_BIND_PARAMS = 90;
+
 // ===========================================================================
 // Signal Detection
 // ===========================================================================
@@ -315,6 +318,33 @@ export async function saveContactAnalysis(
   return row!;
 }
 
+/**
+ * Query existing analyses in batches to avoid D1 bind parameter limits.
+ * D1 has a limit of ~100 bind parameters per query.
+ */
+async function getExistingAnalysisIds(
+  db: D1Database,
+  contactIds: string[],
+): Promise<Set<string>> {
+  const analyzedIds = new Set<string>();
+
+  // Process in batches to avoid D1 bind parameter limits
+  for (let i = 0; i < contactIds.length; i += MAX_BIND_PARAMS) {
+    const batch = contactIds.slice(i, i + MAX_BIND_PARAMS);
+    const placeholders = batch.map(() => '?').join(',');
+    
+    const { results } = await db.prepare(`
+      SELECT contact_id FROM contact_analysis WHERE contact_id IN (${placeholders})
+    `).bind(...batch).all<{ contact_id: string }>();
+
+    for (const row of results) {
+      analyzedIds.add(row.contact_id);
+    }
+  }
+
+  return analyzedIds;
+}
+
 export async function analyzeUserContacts(
   db: D1Database,
   userId: string,
@@ -330,13 +360,9 @@ export async function analyzeUserContacts(
     SELECT * FROM contacts WHERE user_id = ? AND archived = 0
   `).bind(userId).all<ContactRow>();
 
+  // Get existing analyses in batches (handles >100 contacts)
   const contactIds = contacts.map(c => c.id);
-  const placeholders = contactIds.map(() => '?').join(',');
-  const { results: existingAnalyses } = await db.prepare(`
-    SELECT contact_id FROM contact_analysis WHERE contact_id IN (${placeholders})
-  `).bind(...contactIds).all<{ contact_id: string }>();
-
-  const analyzedIds = new Set(existingAnalyses.map(a => a.contact_id));
+  const analyzedIds = await getExistingAnalysisIds(db, contactIds);
 
   let analyzed = 0;
   let skipped = 0;
