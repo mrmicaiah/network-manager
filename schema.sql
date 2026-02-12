@@ -37,6 +37,7 @@ PRAGMA foreign_keys = ON;
 -- preferred_nudge_hour is the hour (0-23) when nudges should be delivered.
 -- nudge_frequency controls how often proactive nudges are sent.
 -- quiet_hours_start/end define a window when no SMS should be sent.
+-- pending_context stores multi-turn SMS conversation state (JSON blob).
 -- @see Roberts & Dunbar (2011, 2015) for gender maintenance patterns.
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS users (
@@ -67,6 +68,7 @@ CREATE TABLE IF NOT EXISTS users (
     CHECK (nudge_frequency IN ('daily', 'weekly', 'as_needed')),
   quiet_hours_start   TEXT DEFAULT NULL,
   quiet_hours_end     TEXT DEFAULT NULL,
+  pending_context     TEXT DEFAULT NULL,
   created_at          TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
 );
