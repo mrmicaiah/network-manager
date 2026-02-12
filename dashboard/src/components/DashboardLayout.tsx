@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { usePermissions } from '../hooks/usePermissions';
+import { useApi } from '../hooks/useApi';
 import {
   LayoutDashboard,
   Users,
@@ -14,7 +15,19 @@ import {
   ChevronDown,
   Sparkles,
   Shield,
+  ClipboardCheck,
 } from 'lucide-react';
+
+// ===========================================================================
+// Types
+// ===========================================================================
+
+interface ReviewStats {
+  contacts: {
+    total_unsorted: number;
+    pending: number;
+  };
+}
 
 // ===========================================================================
 // Navigation Items
@@ -38,6 +51,10 @@ export function DashboardLayout() {
   const navigate = useNavigate();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
+
+  // Fetch review stats for badge
+  const { data: reviewStats } = useApi<ReviewStats>('/api/review/stats');
+  const pendingReviewCount = reviewStats?.contacts?.pending ?? 0;
 
   const handleLogout = async () => {
     await logout();
@@ -109,6 +126,23 @@ export function DashboardLayout() {
               {item.label}
             </NavLink>
           ))}
+
+          {/* Review link with badge */}
+          <NavLink
+            to="/review"
+            onClick={() => setSidebarOpen(false)}
+            className={({ isActive }) =>
+              `nav-item ${isActive ? 'active' : ''}`
+            }
+          >
+            <ClipboardCheck className="w-5 h-5" />
+            <span className="flex-1">Review</span>
+            {pendingReviewCount > 0 && (
+              <span className="px-1.5 py-0.5 text-xs font-medium bg-terracotta/15 text-terracotta rounded-full min-w-[20px] text-center">
+                {pendingReviewCount > 99 ? '99+' : pendingReviewCount}
+              </span>
+            )}
+          </NavLink>
 
           {/* Admin link — only visible to admins */}
           {isAdmin && (
