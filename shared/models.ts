@@ -37,6 +37,17 @@ export type IntentType =
   | 'new';           // Just added — needs sorting
 
 /**
+ * Sortable intent types — intents that can be suggested during contact review.
+ * Excludes 'new' since that's the unsorted state we're moving contacts FROM.
+ */
+export type SortableIntentType = Exclude<IntentType, 'new'>;
+
+/**
+ * Analysis confidence level — how sure Bethany is about a suggestion.
+ */
+export type AnalysisConfidence = 'high' | 'medium' | 'low';
+
+/**
  * Contact health status — derived from intent cadence vs. last contact date.
  * Calculated by calculateHealthStatus() in intent-config.ts.
  */
@@ -237,6 +248,12 @@ export type PendingContextType =
   | 'select_option'
   | 'intent_assignment';
 
+/**
+ * Contact frequency tier — derived from interaction history.
+ * Used as a signal for intent suggestions during contact review.
+ */
+export type ContactFrequencyTier = 'high' | 'medium' | 'low' | 'unknown';
+
 // ===========================================================================
 // Core Models — D1 Row Types
 // ===========================================================================
@@ -407,6 +424,68 @@ export interface NudgeRow {
 }
 
 // ===========================================================================
+// Contact Review System — D1 Row Types
+// ===========================================================================
+
+/**
+ * Signals extracted from a contact for intent suggestion.
+ * Stored as JSON in contact_analysis.signals column.
+ * Each signal contributes to the confidence and suggested_intent.
+ */
+export interface ContactAnalysisSignals {
+  /** Contact shares surname with user or other contacts (likely family) */
+  family_name_match: boolean;
+  /** Email domain suggests work relationship (company domain, not gmail/etc) */
+  work_email_domain: boolean;
+  /** Had interaction within last 30 days */
+  has_recent_interaction: boolean;
+  /** Starred in Google Contacts (if imported) */
+  google_starred: boolean;
+  /** Interaction frequency tier based on history */
+  contact_frequency_tier: ContactFrequencyTier;
+  /** Has birthday stored (suggests closer relationship) */
+  has_birthday: boolean;
+  /** Has notes field populated (suggests intentional relationship) */
+  has_notes: boolean;
+  /** IDs of other contacts with matching surname (for family clustering) */
+  shared_surname_contacts: string[];
+}
+
+/**
+ * ContactAnalysis — Bethany's analysis of a contact for the review flow.
+ * One row per contact (contact_id is UNIQUE).
+ *
+ * Contains the suggested intent, confidence level, human-readable reasoning,
+ * and the raw signals that led to the suggestion. Updated when user reviews.
+ */
+export interface ContactAnalysisRow {
+  id: string;                           // UUID primary key
+  contact_id: string;                   // FK → contacts.id, UNIQUE
+  suggested_intent: SortableIntentType | null;  // What Bethany suggests
+  confidence: AnalysisConfidence | null;        // How confident Bethany is
+  reasoning: string | null;             // Human-readable explanation for UI
+  signals: string | null;               // JSON blob → ContactAnalysisSignals
+  reviewed: number;                     // 0 = pending, 1 = reviewed (D1 boolean)
+  reviewed_at: string | null;           // ISO timestamp when user reviewed
+  user_accepted_suggestion: number | null; // NULL = not reviewed, 0 = rejected, 1 = accepted
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * ReviewSession — tracks a user's contact review session.
+ * Created when user starts reviewing, updated as they progress.
+ * completed_at is NULL while session is in progress.
+ */
+export interface ReviewSessionRow {
+  id: string;                    // UUID primary key
+  user_id: string;               // FK → users.id
+  started_at: string;            // ISO timestamp
+  completed_at: string | null;   // ISO timestamp, NULL = in progress
+  contacts_reviewed: number;     // Running count of contacts reviewed
+}
+
+// ===========================================================================
 // Application-Level Types (camelCase, enriched)
 // ===========================================================================
 
@@ -497,6 +576,23 @@ export interface BraindumpExtraction {
   unresolved: string[]; // Text fragments the AI couldn't parse
 }
 
+/**
+ * Contact analysis with parsed signals — for service layer use.
+ * Transforms the raw JSON signals into typed interface.
+ */
+export interface ContactAnalysisWithSignals extends Omit<ContactAnalysisRow, 'signals'> {
+  signals: ContactAnalysisSignals | null;
+}
+
+/**
+ * Contact with analysis — for review flow presentation.
+ * Combines contact data with Bethany's suggestion.
+ */
+export interface ContactWithAnalysis {
+  contact: ContactRow;
+  analysis: ContactAnalysisWithSignals | null;
+}
+
 // ===========================================================================
 // Service Method Params
 // ===========================================================================
@@ -551,6 +647,26 @@ export interface UpdateNotificationPreferencesInput {
   nudge_frequency?: NudgeFrequency;
   quiet_hours_start?: string | null;
   quiet_hours_end?: string | null;
+}
+
+/**
+ * Input for creating a contact analysis record.
+ */
+export interface CreateContactAnalysisInput {
+  contact_id: string;
+  suggested_intent?: SortableIntentType;
+  confidence?: AnalysisConfidence;
+  reasoning?: string;
+  signals?: ContactAnalysisSignals;
+}
+
+/**
+ * Input for recording a review decision.
+ */
+export interface RecordReviewDecisionInput {
+  contact_id: string;
+  accepted_suggestion: boolean;
+  chosen_intent: IntentType;  // What the user actually chose
 }
 
 /**
