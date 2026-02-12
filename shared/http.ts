@@ -21,19 +21,22 @@ const ALLOWED_ORIGINS = [
   // Local development
   'http://localhost:5173',
   'http://localhost:3000',
+  'http://127.0.0.1:5173',
+  'http://127.0.0.1:3000',
 ];
 
 /**
  * Check if an origin is allowed, including Cloudflare Pages preview deploys.
  *
  * Preview URLs look like: https://<hash>.network-manager.pages.dev
+ * The hash can include lowercase letters, numbers, and hyphens.
  */
 function isAllowedOrigin(origin: string): boolean {
   if (ALLOWED_ORIGINS.includes(origin)) return true;
 
-  // Allow Cloudflare Pages preview deployments
-  if (/^https:\/\/[a-z0-9]+\.network-manager\.pages\.dev$/.test(origin)) return true;
-  if (/^https:\/\/[a-z0-9]+\.network-manager-site\.pages\.dev$/.test(origin)) return true;
+  // Allow Cloudflare Pages preview deployments (hash can include hyphens)
+  if (/^https:\/\/[a-z0-9-]+\.network-manager\.pages\.dev$/.test(origin)) return true;
+  if (/^https:\/\/[a-z0-9-]+\.network-manager-site\.pages\.dev$/.test(origin)) return true;
 
   return false;
 }
