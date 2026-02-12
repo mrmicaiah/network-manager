@@ -1,120 +1,103 @@
 /**
- * Circle Score Service — Dartboard Scoring Engine
+ * Score Service — Circle-Based Relationship Scoring
  *
- * This service calculates relationship health scores for contacts within circles.
- * The dartboard visualization uses a points-based system where contacts earn
- * points through interactions and lose standing through inactivity.
+ * Calculates relationship scores for contacts within circles using the
+ * point system. Each contact can have different scores in different
+ * circles (the "two hats" problem — your brother in Family vs Work).
  *
- * Scoring Model:
+ * The score determines dartboard position:
+ *   - Score >= 1.0: Center (thriving)
+ *   - Score 0.7-0.99: Inner ring (healthy)
+ *   - Score 0.4-0.69: Outer ring (slipping)
+ *   - Score < 0.4: Outside circle (drifting)
  *
- *   - Each circle has a scoring window (default: 30 days)
- *   - Contacts earn points for interactions within the window
- *   - Points vary by interaction method (in-person > call > text > other)
- *   - Preferred method gets a bonus multiplier
- *   - Score = points earned / points required (capped at 1.0)
- *
- * Point Values:
- *
- *   in_person: 4 points (high effort, high value)
- *   call:      3 points (synchronous, personal)
- *   text:      2 points (async but direct)
- *   email:     2 points (async, formal)
- *   social:    1 point  (low effort, public)
- *   other:     2 points (catch-all)
- *
- *   Preferred method bonus: 1.5x multiplier
- *
- * Health Thresholds:
- *
- *   green:  score >= 0.7 (70%+ of required points)
- *   yellow: score >= 0.3 (30-69% of required points)
- *   red:    score < 0.3  (< 30% of required points)
- *
- * Dartboard Layout:
- *
- *   - 12 contacts per dartboard (like clock positions)
- *   - Position determined by score (higher = closer to center)
- *   - Angle spread evenly with slight randomization for visual interest
- *   - Multiple dartboards created if circle has > 12 contacts
- *
- * @see shared/intent-config.ts for layer-based cadence (separate system)
- * @see worker/services/interaction-service.ts for logging interactions
+ * @see shared/point-config.ts for point values and thresholds
+ * @see shared/intent-config.ts for cadence periods
+ * @see docs/dartboard-system-design.md for full system design
  */
 
-import type { IntentType, InteractionMethod, HealthStatus } from '../../shared/models';
-
-// ===========================================================================
-// Configuration
-// ===========================================================================
-
-/** Points required for a "full" score (100%) */
-const POINTS_REQUIRED = 10;
-
-/** How far back to look for interactions (days) */
-const SCORING_WINDOW_DAYS = 30;
-
-/** Maximum contacts per dartboard ring */
-const CONTACTS_PER_DARTBOARD = 12;
-
-/** Base points for each interaction method */
-const METHOD_POINTS: Record<InteractionMethod, number> = {
-  in_person: 4,
-  call: 3,
-  text: 2,
-  email: 2,
-  social: 1,
-  other: 2,
-};
-
-/** Bonus multiplier when using contact's preferred method */
-const PREFERRED_METHOD_MULTIPLIER = 1.5;
+import type { Env } from '../../shared/types';
+import type { IntentType, InteractionMethod } from '../../shared/models';
+import { INTENT_CONFIGS } from '../../shared/intent-config';
+import {
+  POINTS_REQUIRED,
+  calculateInteractionPoints,
+  calculateScore,
+  calculateDartboardPosition,
+  CONTACTS_PER_DARTBOARD,
+  type ScoreStatus,
+  type DartboardPosition,
+} from '../../shared/point-config';
 
 // ===========================================================================
 // Types
 // ===========================================================================
 
+/**
+ * Score result for a single contact in a single circle.
+ */
 export interface CircleScore {
   contactId: string;
   circleId: string;
   pointsEarned: number;
   pointsRequired: number;
-  score: number; // 0.0 to 1.0
-  status: HealthStatus;
+  score: number;
+  status: ScoreStatus;
   interactionCount: number;
   lastInteractionDate: string | null;
 }
 
+/**
+ * Contact with score and dartboard position.
+ */
 export interface DartboardContact extends CircleScore {
   name: string;
   intent: IntentType;
-  position: {
-    angle: number;  // Degrees from 12 o'clock
-    radius: number; // 0 = center, 1 = edge
-  };
+  position: DartboardPosition;
 }
 
+/**
+ * A single dartboard (subset of contacts when circle is large).
+ */
 export interface Dartboard {
   index: number;
+  total: number;
   contacts: DartboardContact[];
 }
 
+/**
+ * Complete dartboard data for a circle.
+ */
 export interface DartboardData {
   circleId: string;
   circleName: string;
+  totalContacts: number;
   dartboards: Dartboard[];
   summary: {
-    total: number;
-    green: number;
-    yellow: number;
-    red: number;
-    averageScore: number;
+    thriving: number;
+    healthy: number;
+    slipping: number;
+    drifting: number;
   };
 }
 
+/**
+ * Tab data for the dashboard.
+ */
 export interface DashboardTab {
   id: string;
   name: string;
   contactCount: number;
+}
+
+/**
+ * Dashboard tabs response.
+ */
+export interface DashboardTabsData {
+  tabs: DashboardTab[];
+  unsortedCount: number;
+  defaultTabId: string | null;
+  tabOrder: string[];
 }
 
 // ===========================================================================
@@ -122,55 +105,42 @@ export interface DashboardTab {
 // ===========================================================================
 
 /**
- * Calculate points earned for a single interaction.
+ * Calculate a contact's score for a specific circle.
+ *
+ * Looks at interactions within the cadence window that count toward
+ * this circle. If the interaction has no circle_context, it counts
+ * for all circles the contact belongs to.
+ *
+ * @param db - D1 database
+ * @param contactId - The contact's ID
+ * @param circleId - The circle to calculate score for
+ * @returns Score result
  */
-function calculateInteractionPoints(
-  method: InteractionMethod,
-  preferredMethod: InteractionMethod | null,
-): number {
-  const basePoints = METHOD_POINTS[method] ?? 2;
-  if (preferredMethod && method === preferredMethod) {
-    return Math.round(basePoints * PREFERRED_METHOD_MULTIPLIER);
-  }
-  return basePoints;
-}
-
-/**
- * Convert points to a 0-1 score and health status.
- */
-function calculateScore(pointsEarned: number): {
-  score: number;
-  status: HealthStatus;
-} {
-  const score = Math.min(pointsEarned / POINTS_REQUIRED, 1.0);
-
-  let status: HealthStatus;
-  if (score >= 0.7) {
-    status = 'green';
-  } else if (score >= 0.3) {
-    status = 'yellow';
-  } else {
-    status = 'red';
-  }
-
-  return { score, status };
-}
-
-/**
- * Calculate the score for a single contact in a specific circle.
- */
-async function calculateCircleScore(
+export async function calculateCircleScore(
   db: D1Database,
   contactId: string,
   circleId: string,
-  windowDays: number = SCORING_WINDOW_DAYS,
 ): Promise<CircleScore> {
-  // Get contact's preferred method
+  // Get contact details
   const contact = await db.prepare(`
-    SELECT preferred_method FROM contacts WHERE id = ?
-  `).bind(contactId).first<{ preferred_method: InteractionMethod | null }>();
+    SELECT intent, preferred_method
+    FROM contacts
+    WHERE id = ?
+  `).bind(contactId).first<{
+    intent: IntentType;
+    preferred_method: InteractionMethod | null;
+  }>();
 
-  // Get interactions within the window that include this circle context
+  if (!contact) {
+    throw new Error(`Contact not found: ${contactId}`);
+  }
+
+  // Get cadence window based on intent
+  const intentConfig = INTENT_CONFIGS[contact.intent];
+  const windowDays = intentConfig.defaultCadenceDays ?? 30;
+
+  // Get interactions in the window that count for this circle
+  // circle_context is NULL (counts for all) OR contains this circle ID
   const { results: interactions } = await db.prepare(`
     SELECT method, date
     FROM interactions
@@ -188,7 +158,7 @@ async function calculateCircleScore(
   for (const interaction of interactions) {
     pointsEarned += calculateInteractionPoints(
       interaction.method,
-      contact?.preferred_method ?? null,
+      contact.preferred_method,
     );
   }
 
@@ -280,80 +250,27 @@ export async function calculateDartboardData(
     }));
 
     dartboards.push({
-      index: dartboardIndex,
+      index: dartboardIndex + 1,
+      total: totalDartboards,
       contacts: dartboardContacts,
     });
   }
 
   // Calculate summary
   const summary = {
-    total: scoredContacts.length,
-    green: scoredContacts.filter(c => c.status === 'green').length,
-    yellow: scoredContacts.filter(c => c.status === 'yellow').length,
-    red: scoredContacts.filter(c => c.status === 'red').length,
-    averageScore: scoredContacts.length > 0
-      ? scoredContacts.reduce((sum, c) => sum + c.score, 0) / scoredContacts.length
-      : 0,
+    thriving: scoredContacts.filter(c => c.status === 'thriving').length,
+    healthy: scoredContacts.filter(c => c.status === 'healthy').length,
+    slipping: scoredContacts.filter(c => c.status === 'slipping').length,
+    drifting: scoredContacts.filter(c => c.status === 'drifting').length,
   };
 
   return {
     circleId,
     circleName: circle.name,
+    totalContacts: scoredContacts.length,
     dartboards,
     summary,
   };
-}
-
-// ===========================================================================
-// Dartboard Positioning
-// ===========================================================================
-
-/**
- * Calculate position for a contact on the dartboard.
- *
- * - Score determines radius (higher score = closer to center)
- * - Index determines base angle (spread evenly around the circle)
- * - Seed adds deterministic variation for visual interest
- */
-function calculateDartboardPosition(
-  score: number,
-  index: number,
-  totalContacts: number,
-  seed: number,
-): { angle: number; radius: number } {
-  // Radius: score 1.0 = center (0.1), score 0.0 = edge (0.9)
-  // We use 0.1-0.9 to leave padding at center and edge
-  const radius = 0.9 - (score * 0.8);
-
-  // Base angle: spread evenly, starting from 12 o'clock
-  const baseAngle = (360 / totalContacts) * index;
-
-  // Add some deterministic variation based on seed
-  const angleVariation = (seededRandom(seed) - 0.5) * (360 / totalContacts) * 0.3;
-  const angle = (baseAngle + angleVariation + 360) % 360;
-
-  return { angle, radius };
-}
-
-/**
- * Simple seeded random for deterministic positioning.
- */
-function seededRandom(seed: number): number {
-  const x = Math.sin(seed * 9999) * 10000;
-  return x - Math.floor(x);
-}
-
-/**
- * Simple string hash for generating consistent seeds.
- */
-function hashString(str: string): number {
-  let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    const char = str.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash = hash & hash;
-  }
-  return Math.abs(hash);
 }
 
 // ===========================================================================
@@ -361,29 +278,25 @@ function hashString(str: string): number {
 // ===========================================================================
 
 /**
- * Get dashboard tabs with contact counts.
- * Respects user's tab order preference.
+ * Get dashboard tab data for a user.
+ * Returns all circles as tabs plus unsorted contact count.
  *
  * @param db - D1 database
  * @param userId - The user's ID
- * @returns Dashboard tabs and unsorted count
+ * @returns Tab data
  */
 export async function getDashboardTabs(
   db: D1Database,
   userId: string,
-): Promise<{
-  tabs: DashboardTab[];
-  unsortedCount: number;
-  defaultTabId: string | null;
-  tabOrder: string[];
-}> {
+): Promise<DashboardTabsData> {
   // Get user preferences
   const user = await db.prepare(`
-    SELECT circle_tab_order, default_circle_id
-    FROM users WHERE id = ?
+    SELECT default_circle_id, circle_tab_order
+    FROM users
+    WHERE id = ?
   `).bind(userId).first<{
-    circle_tab_order: string | null;
     default_circle_id: string | null;
+    circle_tab_order: string | null;
   }>();
 
   // Get circles with contact counts (only counting non-archived contacts)
@@ -538,49 +451,78 @@ export async function updateContactScores(
     SELECT circle_id FROM contact_circles WHERE contact_id = ?
   `).bind(contactId).all<{ circle_id: string }>();
 
-  // Update cached score for each circle
-  for (const { circle_id } of circleIds) {
-    const score = await calculateCircleScore(db, contactId, circle_id);
+  const now = new Date().toISOString();
 
-    // Upsert into circle_scores cache table
+  for (const { circle_id: circleId } of circleIds) {
+    const score = await calculateCircleScore(db, contactId, circleId);
+
+    // Upsert into cache table
     await db.prepare(`
-      INSERT INTO circle_scores (contact_id, circle_id, score, status, updated_at)
-      VALUES (?, ?, ?, ?, datetime('now'))
-      ON CONFLICT(contact_id, circle_id) DO UPDATE SET
+      INSERT INTO circle_scores (contact_id, circle_id, points_earned, score, status, calculated_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT (contact_id, circle_id) DO UPDATE SET
+        points_earned = excluded.points_earned,
         score = excluded.score,
         status = excluded.status,
-        updated_at = excluded.updated_at
-    `).bind(contactId, circle_id, score.score, score.status).run();
+        calculated_at = excluded.calculated_at
+    `).bind(
+      contactId,
+      circleId,
+      score.pointsEarned,
+      score.score,
+      score.status,
+      now,
+    ).run();
   }
 }
 
 /**
- * Batch update scores for all contacts in a circle.
- * Useful after bulk operations.
+ * Recalculate all scores for a user.
+ * Run as a daily cron job to handle point decay.
  *
  * @param db - D1 database
- * @param circleId - The circle to update
+ * @param userId - The user's ID
+ * @returns Count of scores updated
  */
-export async function updateCircleScores(
+export async function recalculateAllScores(
   db: D1Database,
-  circleId: string,
-): Promise<void> {
-  // Get all contacts in this circle
-  const { results: contacts } = await db.prepare(`
-    SELECT contact_id FROM contact_circles WHERE circle_id = ?
-  `).bind(circleId).all<{ contact_id: string }>();
+  userId: string,
+): Promise<{ updated: number }> {
+  // Get all contact-circle pairs for this user
+  const { results: pairs } = await db.prepare(`
+    SELECT DISTINCT c.id as contact_id, cc.circle_id
+    FROM contacts c
+    INNER JOIN contact_circles cc ON c.id = cc.contact_id
+    WHERE c.user_id = ? AND c.archived = 0
+  `).bind(userId).all<{ contact_id: string; circle_id: string }>();
 
-  // Update each contact's score for this circle
-  for (const { contact_id } of contacts) {
-    const score = await calculateCircleScore(db, contact_id, circleId);
+  let updated = 0;
 
-    await db.prepare(`
-      INSERT INTO circle_scores (contact_id, circle_id, score, status, updated_at)
-      VALUES (?, ?, ?, ?, datetime('now'))
-      ON CONFLICT(contact_id, circle_id) DO UPDATE SET
-        score = excluded.score,
-        status = excluded.status,
-        updated_at = excluded.updated_at
-    `).bind(contact_id, circleId, score.score, score.status).run();
+  for (const { contact_id, circle_id } of pairs) {
+    try {
+      await updateContactScores(db, contact_id);
+      updated++;
+    } catch (err) {
+      console.error(`[score] Failed to update ${contact_id}/${circle_id}:`, err);
+    }
   }
+
+  return { updated };
+}
+
+// ===========================================================================
+// Helpers
+// ===========================================================================
+
+/**
+ * Simple string hash for consistent random seeding.
+ */
+function hashString(str: string): number {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash; // Convert to 32-bit integer
+  }
+  return Math.abs(hash);
 }
