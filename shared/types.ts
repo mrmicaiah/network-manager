@@ -24,11 +24,18 @@ export interface Env {
 
   // Secrets — Core
   ANTHROPIC_API_KEY: string;
+  PIN_SIGNING_SECRET: string;
+  INTERNAL_API_KEY: string;
+
+  // Secrets — SendBlue (iMessage)
   SENDBLUE_API_KEY: string;
   SENDBLUE_API_SECRET: string;
   SENDBLUE_PHONE_NUMBER: string;
-  PIN_SIGNING_SECRET: string;
-  INTERNAL_API_KEY: string;
+
+  // Secrets — Twilio (SMS fallback)
+  TWILIO_ACCOUNT_SID?: string;
+  TWILIO_AUTH_TOKEN?: string;
+  TWILIO_PHONE_NUMBER?: string;
 
   // Secrets — Stripe
   STRIPE_SECRET_KEY: string;
