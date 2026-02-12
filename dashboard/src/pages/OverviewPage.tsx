@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useApi } from '../hooks/useApi';
@@ -136,13 +136,14 @@ export function OverviewPage() {
   };
 
   // Handle unsorted count updates from UnsortedTab
-  const handleUnsortedCountChange = (count: number) => {
-    setUnsortedCount(count);
-    // Also refetch tabs to keep everything in sync
-    if (count !== unsortedCount) {
-      refetchTabs();
-    }
-  };
+  const handleUnsortedCountChange = useCallback((count: number) => {
+    setUnsortedCount((prev) => {
+      if (count !== prev) {
+        refetchTabs();
+      }
+      return count;
+    });
+  }, [refetchTabs]);
 
   return (
     <div className="space-y-6">
