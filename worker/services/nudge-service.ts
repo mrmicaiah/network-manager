@@ -121,6 +121,8 @@ export interface NudgeGenerationOptions {
   maxNudges?: number;
   /** Override scheduled delivery time */
   scheduledFor?: string;
+  /** If true, schedule for immediate delivery (used by hourly cron) */
+  immediate?: boolean;
 }
 
 /**
@@ -416,14 +418,17 @@ function generateNudgeReason(
  * - 'weekly': Creates a single digest nudge (only on Monday runs)
  * - 'as_needed': Only creates nudges for red/critical contacts
  *
- * Nudges are scheduled for the next delivery window (user's preferred hour).
+ * Nudges are scheduled for immediate delivery when called from the
+ * hourly cron (options.immediate = true), or for the next delivery
+ * window otherwise.
+ *
  * Respects cooldown period — won't create a new nudge for a contact
  * if they have a pending or recently delivered nudge.
  *
  * @param db      - D1 database binding
  * @param env     - Worker environment (for API keys, but not used in generation)
  * @param userId  - The user to generate nudges for
- * @param options - Generation options (weekly mode, limits, etc.)
+ * @param options - Generation options (weekly mode, limits, immediate, etc.)
  * @param now     - Override current time (for testing)
  */
 export async function generateNudgesForUser(
@@ -478,12 +483,23 @@ export async function generateNudgesForUser(
     };
   }
 
-  // Calculate scheduled delivery time using user's timezone and preferred hour
-  const scheduledFor = options?.scheduledFor ?? calculateNextDeliveryTime(
-    currentTime,
-    user.timezone ?? 'America/Chicago',
-    user.preferred_nudge_hour ?? DEFAULT_DELIVERY_HOUR,
-  );
+  // Calculate scheduled delivery time
+  // If immediate=true (called from hourly cron at user's preferred time),
+  // schedule for NOW so it can be delivered immediately
+  let scheduledFor: string;
+  if (options?.scheduledFor) {
+    scheduledFor = options.scheduledFor;
+  } else if (options?.immediate) {
+    // Schedule for NOW - the cron already determined this is the right time
+    scheduledFor = currentTime.toISOString();
+  } else {
+    // Schedule for next occurrence of preferred hour
+    scheduledFor = calculateNextDeliveryTime(
+      currentTime,
+      user.timezone ?? 'America/Chicago',
+      user.preferred_nudge_hour ?? DEFAULT_DELIVERY_HOUR,
+    );
+  }
 
   // Check for cooldown on each contact
   const eligibleContacts: ContactNeedingAttention[] = [];
@@ -627,6 +643,10 @@ async function createDigestNudge(
 /**
  * Calculate the next delivery window time based on user's timezone and preferred hour.
  *
+ * NOTE: This is used when scheduling nudges for future delivery (not from cron).
+ * When the hourly cron calls generateNudgesForUser with immediate=true,
+ * this function is NOT called — nudges are scheduled for immediate delivery.
+ *
  * @param now - Current time
  * @param timezone - User's IANA timezone
  * @param preferredHour - User's preferred delivery hour (0-23)
@@ -653,7 +673,9 @@ function calculateNextDeliveryTime(
     // Determine if we need to schedule for today or tomorrow
     const deliveryDate = new Date(now);
 
-    if (currentHour >= preferredHour) {
+    // Use > instead of >= so that if we're exactly AT the preferred hour,
+    // we schedule for TODAY (now), not tomorrow
+    if (currentHour > preferredHour) {
       // Already past preferred hour, schedule for tomorrow
       deliveryDate.setDate(deliveryDate.getDate() + 1);
     }
