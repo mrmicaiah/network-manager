@@ -222,7 +222,7 @@ async function runJob(
  *
  * Runs every hour. For each user, checks if their preferred_nudge_hour
  * matches the current hour in their timezone. If so:
- *   1. Generate nudges for that user
+ *   1. Generate nudges for that user (with immediate=true for instant delivery)
  *   2. Immediately deliver any pending nudges
  *
  * This ensures users get nudges at 8am (or their preferred time) in
@@ -258,9 +258,14 @@ async function hourlyNudgeProcessing(env: Env): Promise<Record<string, unknown>>
     usersProcessed++;
 
     try {
-      // Generate nudges
+      // Generate nudges with immediate=true so they're scheduled for NOW
+      // This is critical! Without immediate=true, nudges get scheduled for
+      // tomorrow and never get delivered.
       const isWeekly = user.subscription_tier === 'free';
-      const genResult = await generateNudgesForUser(db, env, user.id, { weekly: isWeekly });
+      const genResult = await generateNudgesForUser(db, env, user.id, { 
+        weekly: isWeekly,
+        immediate: true,  // Schedule for NOW, not next delivery window
+      });
       nudgesGenerated += genResult.nudgesCreated;
 
       // Immediately deliver pending nudges for this user
