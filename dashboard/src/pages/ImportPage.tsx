@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import { useApi, useLazyApi } from '../hooks/useApi';
 import {
   Upload,
@@ -13,6 +14,8 @@ import {
   CheckCircle2,
   XCircle,
   Smartphone,
+  ArrowRight,
+  Sparkles,
 } from 'lucide-react';
 
 // ===========================================================================
@@ -58,6 +61,7 @@ const ACCEPTED_FILE_TYPES = '.csv,.vcf,.vcard';
 // ===========================================================================
 
 export function ImportPage() {
+  const navigate = useNavigate();
   const [viewState, setViewState] = useState<ViewState>('upload');
   const [parsedRows, setParsedRows] = useState<ParsedRow[]>([]);
   const [selectedCircleId, setSelectedCircleId] = useState<string>('');
@@ -70,6 +74,7 @@ export function ImportPage() {
 
   const { data: circles } = useApi<Circle[]>('/api/circles');
   const { execute: createContact } = useLazyApi();
+  const { execute: triggerAnalysis } = useLazyApi();
 
   const handleDownloadTemplate = () => {
     const blob = new Blob([CSV_TEMPLATE], { type: 'text/csv' });
@@ -339,9 +344,16 @@ export function ImportPage() {
       setImportProgress(Math.round(((i + 1) / validRows.length) * 100));
     }
 
+    // Trigger analysis for newly imported contacts
+    try {
+      await triggerAnalysis('/api/review/analyze', { method: 'POST' });
+    } catch (err) {
+      console.error('Failed to trigger analysis:', err);
+    }
+
     setImportResults(results);
     setViewState('complete');
-  }, [parsedRows, selectedCircleId, createContact]);
+  }, [parsedRows, selectedCircleId, createContact, triggerAnalysis]);
 
   const handleReset = useCallback(() => {
     setViewState('upload');
@@ -663,19 +675,57 @@ export function ImportPage() {
               )}
             </div>
 
-            <div className="flex items-center justify-center gap-3">
-              <button
-                onClick={handleReset}
-                className="btn-primary"
-              >
-                Import More
-              </button>
-              <a
-                href="/contacts"
-                className="btn-secondary"
-              >
-                View Contacts
-              </a>
+            {/* Review prompt - show if contacts were imported */}
+            {successCount > 0 && (
+              <div className="bg-gradient-to-r from-terracotta/10 via-blush/30 to-terracotta/10 rounded-xl border border-terracotta/20 p-4 mb-6 text-left">
+                <div className="flex items-start gap-3">
+                  <div className="w-10 h-10 bg-warm-white rounded-lg flex items-center justify-center flex-shrink-0">
+                    <Sparkles className="w-5 h-5 text-terracotta" />
+                  </div>
+                  <div className="flex-1">
+                    <h3 className="font-medium text-charcoal mb-1">Ready to organize?</h3>
+                    <p className="text-sm text-charcoal-light">
+                      I've analyzed your new contacts and have some suggestions for sorting them.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
+              {successCount > 0 ? (
+                <>
+                  <Link
+                    to="/review"
+                    className="btn-primary"
+                  >
+                    <Sparkles className="w-4 h-4" />
+                    Review contacts
+                    <ArrowRight className="w-4 h-4" />
+                  </Link>
+                  <button
+                    onClick={handleReset}
+                    className="btn-secondary"
+                  >
+                    Import More
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    onClick={handleReset}
+                    className="btn-primary"
+                  >
+                    Import More
+                  </button>
+                  <Link
+                    to="/contacts"
+                    className="btn-secondary"
+                  >
+                    View Contacts
+                  </Link>
+                </>
+              )}
             </div>
           </div>
 
