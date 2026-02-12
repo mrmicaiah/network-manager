@@ -86,7 +86,7 @@ const NICKNAME_MAP: Record<string, string[]> = {
   'stephen': ['steve', 'stevie'],
   'tony': ['anthony', 'ant'],
   'anthony': ['tony', 'ant'],
-  'chris': ['christopher', 'christy'],
+  'chris': ['christopher', 'christina', 'christine', 'christy'],
   'christopher': ['chris', 'christy', 'topher'],
   'matt': ['matthew', 'matty'],
   'matthew': ['matt', 'matty'],
@@ -150,7 +150,6 @@ const NICKNAME_MAP: Record<string, string[]> = {
   'kimberly': ['kim', 'kimmy'],
   'jess': ['jessica', 'jessie'],
   'jessica': ['jess', 'jessie'],
-  'chris': ['christina', 'christine', 'christy'],
   'christina': ['chris', 'tina', 'christy'],
   'christine': ['chris', 'christy'],
   'ann': ['anne', 'anna', 'annie'],
@@ -562,6 +561,60 @@ export async function updateContact(
   }
 
   return getContactWithCircles(db, userId, contactId);
+}
+
+/**
+ * Update a contact's last_contact_date and recalculate health status.
+ * Called when an interaction is logged.
+ *
+ * Only updates if the new date is more recent than the existing one
+ * (to handle backdated interactions correctly).
+ *
+ * @param db - D1 database
+ * @param userId - The user's ID
+ * @param contactId - The contact's ID
+ * @param interactionDate - Date of the interaction
+ * @param now - Current timestamp (for health calculation)
+ */
+export async function touchContactDate(
+  db: D1Database,
+  userId: string,
+  contactId: string,
+  interactionDate: string,
+  now: string,
+): Promise<void> {
+  // Get current contact data
+  const contact = await db.prepare(`
+    SELECT intent, contact_kind, last_contact_date
+    FROM contacts
+    WHERE id = ? AND user_id = ?
+  `).bind(contactId, userId).first<{
+    intent: IntentType;
+    contact_kind: ContactKind;
+    last_contact_date: string | null;
+  }>();
+
+  if (!contact) return;
+
+  // Only update if this interaction is more recent
+  const shouldUpdate = !contact.last_contact_date || 
+    interactionDate > contact.last_contact_date;
+
+  if (!shouldUpdate) return;
+
+  // Calculate new health status
+  const newHealth = calculateHealthStatus(
+    contact.intent,
+    interactionDate,
+    contact.contact_kind,
+    now,
+  );
+
+  await db.prepare(`
+    UPDATE contacts
+    SET last_contact_date = ?, health_status = ?, updated_at = ?
+    WHERE id = ? AND user_id = ?
+  `).bind(interactionDate, newHealth, now, contactId, userId).run();
 }
 
 /**
