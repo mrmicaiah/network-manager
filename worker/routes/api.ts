@@ -74,7 +74,7 @@ import {
   handleWebhook,
   cancelAllSubscriptions,
 } from '../services/stripe-service';
-import { parseBraindump, executeBraindumpActions, type BraindumpAction } from '../services/braindump-service';
+import { parseBraindump, refineBraindump, executeBraindumpActions, type BraindumpAction } from '../services/braindump-service';
 import {
   getDashboardTabs,
   calculateDartboardData,
@@ -189,6 +189,8 @@ export async function handleApiRoute(
       response = await handleListInteractions(url, db, user.id);
     } else if (path === '/api/braindump/parse' && method === 'POST') {
       response = await handleBraindumpParse(request, env, user.id);
+    } else if (path === '/api/braindump/refine' && method === 'POST') {
+      response = await handleBraindumpRefine(request, env, user.id);
     } else if (path === '/api/braindump/execute' && method === 'POST') {
       response = await handleBraindumpExecute(request, env, user.id);
     } else if (path === '/api/export' && method === 'GET') {
@@ -534,6 +536,19 @@ async function handleBraindumpExecute(request: Request, env: Env, userId: string
   }
   const result = await executeBraindumpActions(env, userId, body.actions);
   return jsonResponse({ data: result });
+}
+
+async function handleBraindumpRefine(request: Request, env: Env, userId: string): Promise<Response> {
+  const body = await request.json<{ actions: BraindumpAction[]; correction: string }>();
+  if (!body.actions || !Array.isArray(body.actions)) {
+    return errorResponse('Actions array is required', 400);
+  }
+  if (!body.correction?.trim()) {
+    return errorResponse('Correction text is required', 400);
+  }
+  const result = await refineBraindump(env, body.actions, body.correction, userId);
+  if (!result.success) return errorResponse(result.error, 400);
+  return jsonResponse({ data: result.data });
 }
 
 // ===========================================================================
