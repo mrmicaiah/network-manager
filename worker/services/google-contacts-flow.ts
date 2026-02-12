@@ -12,8 +12,8 @@
  *
  *   Bethany: Explains benefit → sends OAuth link
  *   User: Taps link → Google consent → callback
- *   Callback: Triggers import → Bethany texts results
- *   Bethany: Reports stats → offers to start sorting
+ *   Callback: Triggers import → analyzes contacts → Bethany texts results
+ *   Bethany: Reports stats → offers to start sorting (with link to /review)
  *
  * Error handling:
  *   - User declines → graceful acceptance, no pressure
@@ -23,6 +23,7 @@
  *
  * @see worker/services/google-oauth-service.ts for OAuth lifecycle
  * @see worker/services/google-contacts-service.ts for import pipeline
+ * @see worker/services/contact-analysis-service.ts for analysis
  * @see worker/services/conversation-router.ts for intent dispatch
  */
 
@@ -34,6 +35,7 @@ import {
   revokeAccess,
 } from './google-oauth-service';
 import { importGoogleContacts, type ImportResult } from './google-contacts-service';
+import { analyzeUserContacts } from './contact-analysis-service';
 
 // ===========================================================================
 // Types
@@ -120,7 +122,7 @@ async function handleAlreadyConnected(
  * Called after the OAuth callback succeeds.
  *
  * This is the critical moment — the user just authorized Google access,
- * and now we import their contacts and text them the results.
+ * and now we import their contacts, analyze them, and text the results.
  *
  * @param env  - Worker environment
  * @param user - The user who just connected
@@ -135,7 +137,19 @@ export async function handlePostAuthImport(
       requirePhone: true,
     });
 
-    return formatImportResults(result, user);
+    // Trigger analysis for newly imported contacts so suggestions are ready
+    // when user visits the review page
+    if (result.imported > 0) {
+      try {
+        await analyzeUserContacts(user.id, env.DB);
+        console.log(`[google-flow] Analyzed contacts for user ${user.id}`);
+      } catch (err) {
+        // Log but don't fail the import — analysis can be triggered later
+        console.error(`[google-flow] Analysis failed for user ${user.id}:`, err);
+      }
+    }
+
+    return formatImportResults(result, user, env);
   } catch (err) {
     console.error(`[google-flow] Import failed for user ${user.id}:`, err);
     return handleImportError(err);
@@ -148,9 +162,14 @@ export async function handlePostAuthImport(
 function formatImportResults(
   result: ImportResult,
   user: UserRow,
+  env: Env,
 ): GoogleFlowResponse {
   const { imported, duplicates, skipped } = result;
   const total = imported + duplicates;
+
+  // Get review URL
+  const dashboardUrl = env.DASHBOARD_URL || 'https://network-manager.pages.dev';
+  const reviewUrl = `${dashboardUrl}/review`;
 
   // No contacts found at all
   if (total === 0 && skipped === 0) {
@@ -187,14 +206,14 @@ function formatImportResults(
     reply += ` (Skipped ${skipped} without phone numbers.)`;
   }
 
-  // Offer to sort if there are new unsorted contacts
+  // Offer to sort if there are new unsorted contacts — include review link
   if (imported > 0) {
-    reply += `\n\nWant to start sorting them into relationship layers? Just say "sort my contacts."`;
+    reply += `\n\nI've analyzed them and have some suggestions. Tap here to review: ${reviewUrl}`;
   }
 
   return {
     reply,
-    expectsReply: imported > 0,
+    expectsReply: false, // Changed: link is in message, no need for reply
   };
 }
 
@@ -226,7 +245,17 @@ export async function handleResync(
       requirePhone: true,
     });
 
-    return formatResyncResults(result);
+    // Trigger analysis for newly imported contacts
+    if (result.imported > 0) {
+      try {
+        await analyzeUserContacts(user.id, env.DB);
+        console.log(`[google-flow] Analyzed contacts after re-sync for user ${user.id}`);
+      } catch (err) {
+        console.error(`[google-flow] Analysis failed after re-sync for user ${user.id}:`, err);
+      }
+    }
+
+    return formatResyncResults(result, env);
   } catch (err) {
     console.error(`[google-flow] Re-sync failed for user ${user.id}:`, err);
     return handleImportError(err);
@@ -236,8 +265,12 @@ export async function handleResync(
 /**
  * Format re-sync results (different tone from initial import).
  */
-function formatResyncResults(result: ImportResult): GoogleFlowResponse {
+function formatResyncResults(result: ImportResult, env: Env): GoogleFlowResponse {
   const { imported, updated, duplicates } = result;
+
+  // Get review URL
+  const dashboardUrl = env.DASHBOARD_URL || 'https://network-manager.pages.dev';
+  const reviewUrl = `${dashboardUrl}/review`;
 
   if (imported === 0 && updated === 0) {
     return {
@@ -253,12 +286,12 @@ function formatResyncResults(result: ImportResult): GoogleFlowResponse {
   let reply = `Sync complete! ${parts.join(', ')}.`;
 
   if (imported > 0) {
-    reply += ` Say "sort my contacts" to assign layers to the new ones.`;
+    reply += ` I've analyzed them — tap here to review: ${reviewUrl}`;
   }
 
   return {
     reply,
-    expectsReply: imported > 0,
+    expectsReply: false,
   };
 }
 
