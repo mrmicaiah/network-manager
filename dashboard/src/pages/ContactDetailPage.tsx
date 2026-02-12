@@ -1288,18 +1288,6 @@ export default function ContactDetailPage() {
               </div>
               <RelationshipInsights contact={contact} interactions={interactions as InteractionWithCircles[]} />
             </section>
-
-            {/* Danger zone */}
-            <section className="bg-warm-white rounded-2xl border border-red-200 p-5">
-              <h3 className="font-medium text-red-700 mb-3">Danger Zone</h3>
-              <button
-                onClick={() => setConfirmAction('delete')}
-                className="w-full flex items-center justify-center gap-2 px-4 py-2 border-2 border-red-200 text-red-600 rounded-xl text-sm font-medium hover:bg-red-50 transition-colors"
-              >
-                <Trash2 className="w-4 h-4" />
-                Delete permanently
-              </button>
-            </section>
           </div>
 
           {/* Right column: Interaction history */}
@@ -1325,6 +1313,21 @@ export default function ContactDetailPage() {
             </section>
           </div>
         </div>
+
+        {/* Danger Zone — full width, at the very bottom */}
+        <section className="mt-8 bg-warm-white rounded-2xl border border-red-200 p-5">
+          <h3 className="font-medium text-red-700 mb-3">Danger Zone</h3>
+          <p className="text-sm text-charcoal-light mb-4">
+            Permanently delete this contact and all their interaction history. This action cannot be undone.
+          </p>
+          <button
+            onClick={() => setConfirmAction('delete')}
+            className="inline-flex items-center justify-center gap-2 px-4 py-2 border-2 border-red-200 text-red-600 rounded-xl text-sm font-medium hover:bg-red-50 transition-colors"
+          >
+            <Trash2 className="w-4 h-4" />
+            Delete permanently
+          </button>
+        </section>
       </div>
 
       {/* Confirm modals */}
