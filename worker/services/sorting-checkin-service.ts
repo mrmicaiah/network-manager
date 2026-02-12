@@ -301,8 +301,8 @@ function generateSortingMessage(env: Env, candidate: SortingCheckinCandidate): s
   const firstName = name.split(' ')[0];
   const weeklyLimit = FREE_TIER_LIMITS.max_sorting_per_week;
 
-  // Get the dashboard URL from env, fallback to production
-  const dashboardUrl = env.DASHBOARD_URL || 'https://app.bethany.network';
+  // Use DASHBOARD_URL from env (set in wrangler.toml)
+  const dashboardUrl = env.DASHBOARD_URL || 'https://network-manager.pages.dev';
   const reviewUrl = `${dashboardUrl}/review`;
 
   // Determine what to highlight
