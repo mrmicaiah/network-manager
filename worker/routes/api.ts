@@ -18,6 +18,7 @@
  *   /api/auth/google/*   — Google Contacts OAuth (connect, disconnect, status, sync)
  *   /api/dashboard/*     — Dashboard tabs and dartboard data
  *   /api/admin/*         — Admin dashboard (permission-guarded)
+ *   /api/debug/*         — Debug endpoints for troubleshooting
  *   /api/stripe/webhook  — Stripe webhook handler (no auth)
  *
  * Standard response format:
@@ -230,6 +231,9 @@ export async function handleApiRoute(
       response = await handleGoogleSync({ user, env, origin });
     } else if (path.startsWith('/api/admin/')) {
       response = await handleAdminRoute(request, env, user.id, path, method, origin);
+    } else if (path.startsWith('/api/debug/')) {
+      const { handleDebugRoute } = await import('./debug');
+      response = await handleDebugRoute(request, env, user.id, path, method, origin);
     } else {
       response = errorResponse('Not found', 404);
     }
