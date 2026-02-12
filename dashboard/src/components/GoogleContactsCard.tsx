@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { Link } from 'react-router-dom';
 import { useApi, useLazyApi } from '../hooks/useApi';
 import {
   Check,
@@ -7,6 +8,8 @@ import {
   RefreshCw,
   Unlink,
   ExternalLink,
+  Sparkles,
+  ArrowRight,
 } from 'lucide-react';
 
 // ===========================================================================
@@ -48,6 +51,7 @@ export function GoogleContactsCard() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
   const [syncResult, setSyncResult] = useState<SyncResult | null>(null);
+  const [showReviewPrompt, setShowReviewPrompt] = useState(false);
 
   // Handle OAuth redirect params (?google=success|error)
   useEffect(() => {
@@ -60,8 +64,12 @@ export function GoogleContactsCard() {
         type: 'info',
         text: 'Google Contacts connected! Bethany is importing your contacts in the background — she\'ll text you when it\'s done.',
       });
+      setShowReviewPrompt(true);
       // Refresh status to show connected state
       refetch();
+      
+      // Trigger analysis in the background
+      apiCall('/api/review/analyze', { method: 'POST' }).catch(() => {});
     } else if (googleParam === 'error') {
       const errorMessages: Record<string, string> = {
         denied: 'You declined the Google Contacts permission. No worries — you can connect anytime.',
@@ -81,7 +89,7 @@ export function GoogleContactsCard() {
       url.searchParams.delete('reason');
       window.history.replaceState({}, '', url.pathname + url.search);
     }
-  }, [refetch]);
+  }, [refetch, apiCall]);
 
   // Connect — opens Google OAuth in same window
   const handleConnect = useCallback(async () => {
@@ -124,6 +132,7 @@ export function GoogleContactsCard() {
 
       setMessage({ type: 'success', text: 'Google Contacts disconnected' });
       setSyncResult(null);
+      setShowReviewPrompt(false);
       await refetch();
     } catch (err) {
       setMessage({
@@ -140,6 +149,7 @@ export function GoogleContactsCard() {
     setIsSyncing(true);
     setMessage(null);
     setSyncResult(null);
+    setShowReviewPrompt(false);
 
     try {
       const result = await apiCall('/api/auth/google/sync', {
@@ -148,10 +158,21 @@ export function GoogleContactsCard() {
       });
 
       setSyncResult(result as SyncResult);
+      
+      const syncRes = result as SyncResult;
+      const hasNewContacts = syncRes.imported > 0 || syncRes.updated > 0;
+      
       setMessage({
         type: 'success',
-        text: formatSyncResult(result as SyncResult),
+        text: formatSyncResult(syncRes),
       });
+      
+      // Trigger analysis and show review prompt if new contacts
+      if (hasNewContacts) {
+        await apiCall('/api/review/analyze', { method: 'POST' }).catch(() => {});
+        setShowReviewPrompt(true);
+      }
+      
       await refetch();
     } catch (err) {
       setMessage({
@@ -280,6 +301,30 @@ export function GoogleContactsCard() {
             <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
           )}
           {message.text}
+        </div>
+      )}
+
+      {/* Review prompt after sync */}
+      {showReviewPrompt && (
+        <div className="bg-gradient-to-r from-terracotta/10 via-blush/20 to-terracotta/10 rounded-xl border border-terracotta/20 p-4">
+          <div className="flex items-start gap-3">
+            <div className="w-8 h-8 bg-warm-white rounded-lg flex items-center justify-center flex-shrink-0">
+              <Sparkles className="w-4 h-4 text-terracotta" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <h4 className="font-medium text-charcoal text-sm mb-1">Ready to organize?</h4>
+              <p className="text-xs text-charcoal-light mb-2">
+                I've analyzed your contacts and have suggestions for sorting them.
+              </p>
+              <Link
+                to="/review"
+                className="inline-flex items-center gap-1.5 text-sm font-medium text-terracotta hover:text-terracotta-dark transition-colors"
+              >
+                Review contacts
+                <ArrowRight className="w-3.5 h-3.5" />
+              </Link>
+            </div>
+          </div>
         </div>
       )}
     </div>
