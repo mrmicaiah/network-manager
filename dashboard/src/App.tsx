@@ -12,6 +12,7 @@ import ContactsPage from './pages/ContactsPage';
 import ContactDetailPage from './pages/ContactDetailPage';
 import { BraindumpPage } from './pages/BraindumpPage';
 import { ImportPage } from './pages/ImportPage';
+import { ReviewPage } from './pages/ReviewPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { ForbiddenPage } from './pages/ForbiddenPage';
 import AdminOverviewPage from './pages/admin/AdminOverviewPage';
@@ -52,6 +53,7 @@ export default function App() {
           <Route path="/contacts/:id" element={<ContactDetailPage />} />
           <Route path="/braindump" element={<BraindumpPage />} />
           <Route path="/import" element={<ImportPage />} />
+          <Route path="/review" element={<ReviewPage />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Route>
 
