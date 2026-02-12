@@ -174,7 +174,8 @@ export async function logInteraction(
     .run();
 
   // Update the contact's last_contact_date and recalculate health
-  await touchContactDate(db, userId, input.contact_id, interactionDate, now);
+  const nowString = (now ?? new Date()).toISOString();
+  await touchContactDate(db, userId, input.contact_id, interactionDate, nowString);
 
   // Recalculate circle scores for affected circles
   // This updates the cached scores used by the dartboard
