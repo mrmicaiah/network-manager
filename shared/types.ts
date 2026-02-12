@@ -45,6 +45,7 @@ export interface Env {
   MAX_FREE_CONTACTS: string; // wrangler vars are always strings
   TRIAL_DAYS: string;
   DASHBOARD_URL: string;     // URL for redirects after Stripe checkout
+  WORKER_URL: string;        // Worker URL for OAuth callbacks (Pages doesn't handle /api/*)
 }
 
 // ---------------------------------------------------------------------------

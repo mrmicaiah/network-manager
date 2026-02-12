@@ -67,5 +67,6 @@ crons = [
 ENVIRONMENT = "production"
 SIGNUP_BASE_URL = "https://app.untitledpublishers.com"
 DASHBOARD_URL = "https://network-manager.pages.dev"
+WORKER_URL = "https://network-manager.micaiah-tasks.workers.dev"
 MAX_FREE_CONTACTS = "15"
 TRIAL_DAYS = "14"
