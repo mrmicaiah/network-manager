@@ -141,7 +141,8 @@ export async function handlePostAuthImport(
     // when user visits the review page
     if (result.imported > 0) {
       try {
-        await analyzeUserContacts(user.id, env.DB);
+        // Note: analyzeUserContacts signature is (db, userId)
+        await analyzeUserContacts(env.DB, user.id);
         console.log(`[google-flow] Analyzed contacts for user ${user.id}`);
       } catch (err) {
         // Log but don't fail the import — analysis can be triggered later
@@ -248,7 +249,8 @@ export async function handleResync(
     // Trigger analysis for newly imported contacts
     if (result.imported > 0) {
       try {
-        await analyzeUserContacts(user.id, env.DB);
+        // Note: analyzeUserContacts signature is (db, userId)
+        await analyzeUserContacts(env.DB, user.id);
         console.log(`[google-flow] Analyzed contacts after re-sync for user ${user.id}`);
       } catch (err) {
         console.error(`[google-flow] Analysis failed after re-sync for user ${user.id}:`, err);
