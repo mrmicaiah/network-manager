@@ -136,7 +136,7 @@ export interface ConversationResponse {
  */
 export interface PendingContext {
   /** What kind of follow-up we're expecting */
-  type: 'clarify_intent' | 'confirm_action' | 'select_contact' | 'select_option' | 'intent_assignment';
+  type: 'clarify_intent' | 'confirm_action' | 'select_contact' | 'select_option' | 'intent_assignment' | 'confirm_duplicate';
   /** The original intent being clarified */
   originalIntent: ConversationIntent;
   /** Any data the handler needs carried forward */
@@ -390,6 +390,11 @@ export async function routeConversation(
         createdAt: new Date().toISOString(),
       } : undefined,
     };
+  }
+
+  // Handle duplicate confirmation context
+  if (pendingContext?.type === 'confirm_duplicate') {
+    return await handleDuplicateConfirmation(message, user, env, pendingContext);
   }
 
   // Step 1: Classify the message
@@ -780,6 +785,11 @@ const handleSortContacts: SubHandler = async (classified, user, env) => {
  *   1. checkSubscriptionStatus was called with (db, userId, env) but expects (db, userRow, now?)
  *   2. Checked non-existent `canAddContact` property on SubscriptionStatus
  *   3. No error handling around createContact — Bethany could claim success without DB write
+ *
+ * FEATURE (2026-02-11): Added duplicate detection
+ *   - Checks for potential duplicates using fuzzy name matching before creating
+ *   - Uses Levenshtein distance + nickname mappings (200+ common nicknames)
+ *   - Asks user to confirm if a close match is found
  */
 const handleAddContact: SubHandler = async (classified, user, env) => {
   if (classified.contactNames.length === 0) {
@@ -795,7 +805,7 @@ const handleAddContact: SubHandler = async (classified, user, env) => {
     };
   }
 
-  const { createContact } = await import('./contact-service');
+  const { createContact, findPotentialDuplicates } = await import('./contact-service');
   const { checkSubscriptionStatus } = await import('./subscription-service');
 
   // Check subscription — pass the full user object, not just the ID
@@ -811,6 +821,36 @@ const handleAddContact: SubHandler = async (classified, user, env) => {
 
   const name = classified.contactNames[0];
 
+  // Check for potential duplicates before creating
+  const duplicates = await findPotentialDuplicates(env.DB, user.id, name);
+  
+  if (duplicates.length > 0) {
+    // Found potential duplicates — ask user to confirm
+    const topMatch = duplicates[0];
+    const matchList = duplicates.slice(0, 3).map((d, i) => 
+      `${i + 1}. ${d.existingName} (${Math.round(d.similarity * 100)}% match${d.matchReason === 'nickname' ? ', nickname' : ''})`
+    ).join('\n');
+    
+    return {
+      reply: `I found someone similar in your network:\n${matchList}\n\nIs "${name}" the same person as one of these, or someone new?\n\nReply with the number if it's a match, or "new" to add them as a new contact.`,
+      expectsReply: true,
+      pendingContext: {
+        type: 'confirm_duplicate',
+        originalIntent: 'add_contact',
+        data: {
+          newName: name,
+          duplicates: duplicates.slice(0, 3).map(d => ({
+            id: d.existingContactId,
+            name: d.existingName,
+            similarity: d.similarity,
+          })),
+        },
+        createdAt: new Date().toISOString(),
+      },
+    };
+  }
+
+  // No duplicates found — create the contact
   try {
     const contact = await createContact(env.DB, user.id, {
       name,
@@ -1004,6 +1044,126 @@ const handleUnknown: SubHandler = async (classified, user) => {
     expectsReply: true,
   };
 };
+
+// ===========================================================================
+// Duplicate Confirmation Handler
+// ===========================================================================
+
+/**
+ * Handle user's response to duplicate contact confirmation.
+ *
+ * User can reply with:
+ *   - A number (1, 2, 3) to select an existing contact
+ *   - "new" / "add" / "different" to add as new contact anyway
+ *   - "cancel" / "nevermind" to abort
+ */
+async function handleDuplicateConfirmation(
+  message: NormalizedInboundMessage,
+  user: UserRow,
+  env: Env,
+  pendingContext: PendingContext,
+): Promise<ConversationResponse> {
+  const { createContact } = await import('./contact-service');
+  const { startIntentAssignment } = await import('./intent-assignment-flow');
+
+  const data = pendingContext.data as {
+    newName: string;
+    duplicates: Array<{ id: string; name: string; similarity: number }>;
+  };
+
+  const reply = message.body.toLowerCase().trim();
+
+  // Check for cancel
+  if (/^(cancel|nevermind|never mind|nvm|forget it|stop)$/i.test(reply)) {
+    return {
+      reply: "No problem, cancelled. Let me know if you need anything else!",
+      expectsReply: false,
+    };
+  }
+
+  // Check for "new" / "add anyway"
+  if (/^(new|add|different|no|nope|someone else|add anyway|new person|new contact)$/i.test(reply)) {
+    // User confirmed this is a new person — create the contact
+    try {
+      const contact = await createContact(env.DB, user.id, {
+        name: data.newName,
+        source: 'sms',
+      });
+
+      if (!contact || !contact.id) {
+        return {
+          reply: `I tried to add ${data.newName} but something went wrong. Mind trying again?`,
+          expectsReply: true,
+        };
+      }
+
+      console.log(`[add_contact] Created new contact after duplicate check: ${contact.id} (${contact.name})`);
+
+      // Start intent assignment
+      const result = await startIntentAssignment(env, user, contact.id);
+
+      return {
+        reply: `Added ${contact.name} to your network!\n\n${result.reply}`,
+        expectsReply: result.expectsReply,
+        pendingContext: result.pendingContext ? {
+          type: 'intent_assignment',
+          originalIntent: 'add_contact',
+          data: result.pendingContext as unknown as Record<string, unknown>,
+          createdAt: new Date().toISOString(),
+        } : undefined,
+      };
+    } catch (err) {
+      console.error('[add_contact] Failed to create contact after duplicate check:', err);
+      return {
+        reply: `Something went wrong trying to add ${data.newName}. Mind trying again?`,
+        expectsReply: true,
+      };
+    }
+  }
+
+  // Check for number selection (1, 2, 3)
+  const numMatch = reply.match(/^(\d+)$/);
+  if (numMatch) {
+    const index = parseInt(numMatch[1], 10) - 1;
+    if (index >= 0 && index < data.duplicates.length) {
+      const selected = data.duplicates[index];
+      return {
+        reply: `Got it — "${data.newName}" is the same as ${selected.name}. I won't add a duplicate. Want me to look up ${selected.name} for you?`,
+        expectsReply: true,
+        pendingContext: {
+          type: 'confirm_action',
+          originalIntent: 'query_contact',
+          data: { contactId: selected.id, contactName: selected.name },
+          createdAt: new Date().toISOString(),
+        },
+      };
+    }
+  }
+
+  // Check if they mentioned one of the existing names
+  for (let i = 0; i < data.duplicates.length; i++) {
+    const dup = data.duplicates[i];
+    if (reply.includes(dup.name.toLowerCase())) {
+      return {
+        reply: `Got it — "${data.newName}" is the same as ${dup.name}. I won't add a duplicate. Want me to look up ${dup.name} for you?`,
+        expectsReply: true,
+        pendingContext: {
+          type: 'confirm_action',
+          originalIntent: 'query_contact',
+          data: { contactId: dup.id, contactName: dup.name },
+          createdAt: new Date().toISOString(),
+        },
+      };
+    }
+  }
+
+  // Didn't understand — ask again
+  return {
+    reply: `I didn't catch that. Reply with a number (1-${data.duplicates.length}) if "${data.newName}" is the same as one of the matches I found, or say "new" to add them as a new contact.`,
+    expectsReply: true,
+    pendingContext: pendingContext, // Keep the same context
+  };
+}
 
 // ===========================================================================
 // Utility Functions
