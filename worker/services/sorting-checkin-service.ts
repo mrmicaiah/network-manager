@@ -38,9 +38,6 @@ import { FREE_TIER_LIMITS } from '../../shared/models';
 /** Minimum days between sorting offers (prevents spam) */
 const SORTING_OFFER_COOLDOWN_DAYS = 6;
 
-/** Dashboard URL template for sorting */
-const DASHBOARD_SORT_URL = 'https://app.untitledpublishers.com/sort';
-
 // ===========================================================================
 // Types
 // ===========================================================================
@@ -90,8 +87,26 @@ export async function generateSortingCheckins(
   db: D1Database,
   env: Env,
   now?: Date,
+): Promise<SortingCheckinResult>;
+
+/**
+ * Generate and send sorting check-in for a specific user.
+ * Used by the hourly timezone-aware cron job.
+ */
+export async function generateSortingCheckins(
+  db: D1Database,
+  env: Env,
+  userId: string,
+): Promise<SortingCheckinResult>;
+
+export async function generateSortingCheckins(
+  db: D1Database,
+  env: Env,
+  nowOrUserId?: Date | string,
 ): Promise<SortingCheckinResult> {
-  const currentTime = now ?? new Date();
+  const currentTime = nowOrUserId instanceof Date ? nowOrUserId : new Date();
+  const specificUserId = typeof nowOrUserId === 'string' ? nowOrUserId : undefined;
+  
   const cooldownCutoff = new Date(
     currentTime.getTime() - SORTING_OFFER_COOLDOWN_DAYS * 24 * 60 * 60 * 1000
   );
@@ -104,8 +119,11 @@ export async function generateSortingCheckins(
     errors: 0,
   };
 
-  // Get users with unsorted contacts who haven't been offered recently
-  const candidates = await getSortingCandidates(db, cooldownCutoff);
+  // Get candidates (either all or specific user)
+  const candidates = specificUserId 
+    ? await getSortingCandidateById(db, specificUserId, cooldownCutoff)
+    : await getSortingCandidates(db, cooldownCutoff);
+    
   result.usersChecked = candidates.length;
 
   for (const candidate of candidates) {
@@ -190,6 +208,55 @@ async function getSortingCandidates(
   }));
 }
 
+/**
+ * Get a specific user's sorting candidate data.
+ */
+async function getSortingCandidateById(
+  db: D1Database,
+  userId: string,
+  cooldownCutoff: Date,
+): Promise<SortingCheckinCandidate[]> {
+  const row = await db
+    .prepare(
+      `SELECT 
+         u.id as userId,
+         u.phone,
+         u.name,
+         u.subscription_tier as tier,
+         u.last_sorting_offer as lastOffer,
+         COUNT(CASE WHEN c.intent = 'new' THEN 1 END) as unsortedCount,
+         COUNT(CASE WHEN c.intent = 'new' AND (c.notes IS NULL OR c.notes = '') THEN 1 END) as noIntentCount
+       FROM users u
+       LEFT JOIN contacts c ON u.id = c.user_id AND c.archived = 0
+       WHERE u.id = ?
+         AND (u.onboarding_stage IS NULL OR u.onboarding_stage = 'ready')
+       GROUP BY u.id
+       HAVING unsortedCount > 0 OR noIntentCount > 0`
+    )
+    .bind(userId)
+    .first<{
+      userId: string;
+      phone: string;
+      name: string;
+      tier: SubscriptionTier;
+      lastOffer: string | null;
+      unsortedCount: number;
+      noIntentCount: number;
+    }>();
+
+  if (!row) return [];
+
+  return [{
+    userId: row.userId,
+    phone: row.phone,
+    name: row.name,
+    tier: row.tier,
+    unsortedCount: row.unsortedCount,
+    noIntentCount: row.noIntentCount,
+    lastOffer: row.lastOffer,
+  }];
+}
+
 // ===========================================================================
 // Message Generation & Sending
 // ===========================================================================
@@ -201,7 +268,7 @@ async function sendSortingCheckin(
   env: Env,
   candidate: SortingCheckinCandidate,
 ): Promise<void> {
-  const message = generateSortingMessage(candidate);
+  const message = generateSortingMessage(env, candidate);
 
   const response = await fetch('https://api.sendblue.co/api/send-message', {
     method: 'POST',
@@ -225,11 +292,18 @@ async function sendSortingCheckin(
 
 /**
  * Generate personalized sorting check-in message.
+ * 
+ * Now includes a direct link to the /review page where users can
+ * review Bethany's suggestions and sort contacts quickly.
  */
-function generateSortingMessage(candidate: SortingCheckinCandidate): string {
+function generateSortingMessage(env: Env, candidate: SortingCheckinCandidate): string {
   const { name, unsortedCount, noIntentCount, tier } = candidate;
   const firstName = name.split(' ')[0];
   const weeklyLimit = FREE_TIER_LIMITS.max_sorting_per_week;
+
+  // Get the dashboard URL from env, fallback to production
+  const dashboardUrl = env.DASHBOARD_URL || 'https://app.bethany.network';
+  const reviewUrl = `${dashboardUrl}/review`;
 
   // Determine what to highlight
   const totalNeedingSorting = unsortedCount + noIntentCount;
@@ -237,22 +311,25 @@ function generateSortingMessage(candidate: SortingCheckinCandidate): string {
 
   // Build the message based on counts
   let intro: string;
-  if (unsortedCount > 0 && noIntentCount > 0) {
-    intro = `Hey ${firstName}! You've got ${unsortedCount} ${contactWord} I haven't placed yet, and ${noIntentCount} without a clear goal.`;
+  if (unsortedCount > 5) {
+    // Many contacts - emphasize the review page
+    intro = `Hey ${firstName}! You've got ${unsortedCount} ${contactWord} waiting to be sorted. I've analyzed them and have some suggestions ready for you.`;
   } else if (unsortedCount > 0) {
     intro = `Hey ${firstName}! You've got ${unsortedCount} ${contactWord} I haven't sorted yet.`;
   } else {
     intro = `Hey ${firstName}! I noticed ${noIntentCount} of your contacts could use a clearer relationship goal.`;
   }
 
-  // Add tier-specific limit note for free users
+  // Call to action - emphasize the review page
+  const cta = `\n\nTap here to review them: ${reviewUrl}`;
+
+  // Add tier-specific limit note for free users doing SMS sorting
   let limitNote = '';
   if (tier === 'free') {
-    limitNote = `\n\n(On the free plan, you can sort up to ${weeklyLimit} contacts per week via text.)`;
+    limitNote = `\n\n(Or reply here to sort via text — up to ${weeklyLimit} per week on the free plan.)`;
+  } else {
+    limitNote = `\n\n(Or just reply here to sort via text!)`;
   }
-
-  // Call to action with both options
-  const cta = `\n\nWant to sort through a few? You can do it here via text, or head to your dashboard: ${DASHBOARD_SORT_URL}`;
 
   return intro + cta + limitNote;
 }
