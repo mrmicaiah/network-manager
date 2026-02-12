@@ -13,6 +13,7 @@
  *   /api/braindump/*     — Parse and execute natural language commands
  *   /api/export/*        — CSV export with filters
  *   /api/import/*        — CSV import and bulk import flow
+ *   /api/review/*        — Contact review flow (analysis, batches, sessions)
  *   /api/user/*          — Profile read/update, notification preferences, account deletion
  *   /api/subscription/*  — Tier info, checkout, portal
  *   /api/auth/google/*   — Google Contacts OAuth (connect, disconnect, status, sync)
@@ -121,7 +122,7 @@ export async function handleApiRoute(
   const method = request.method;
   const origin = request.headers.get('Origin');
 
-  // Auth routes (handle their own CORS via auth-service, but we wrap anyway)
+  // Auth routes (no auth required)
   if (path === '/api/auth/send-code' && method === 'POST') {
     return applyCorsHeaders(await handleSendCode(request, env), origin);
   }
@@ -138,6 +139,7 @@ export async function handleApiRoute(
     return handleStripeWebhook(request, env);
   }
 
+  // All other routes require auth
   const auth = await requireAuth(request, env);
   if (!auth.valid) return applyCorsHeaders(auth.response, origin);
 
@@ -146,13 +148,16 @@ export async function handleApiRoute(
   let response: Response;
 
   try {
+    // Dashboard routes
     if (path === '/api/dashboard/tabs' && method === 'GET') {
       response = await handleGetDashboardTabs(db, user.id);
     } else if (path.match(/^\/api\/dashboard\/dartboard\/[^/]+$/) && method === 'GET') {
       response = await handleGetDartboard(path, db, user.id);
     } else if (path === '/api/dashboard/unsorted' && method === 'GET') {
       response = await handleGetUnsorted(url, db, user.id);
-    } else if (path === '/api/contacts' && method === 'GET') {
+    }
+    // Contacts routes
+    else if (path === '/api/contacts' && method === 'GET') {
       response = await handleListContacts(url, db, user.id);
     } else if (path === '/api/contacts' && method === 'POST') {
       response = await handleCreateContact(request, db, user.id);
@@ -172,7 +177,9 @@ export async function handleApiRoute(
       response = await handleArchiveContact(path, db, user.id);
     } else if (path.match(/^\/api\/contacts\/[^/]+\/restore$/) && method === 'POST') {
       response = await handleRestoreContact(path, db, user.id);
-    } else if (path === '/api/circles' && method === 'GET') {
+    }
+    // Circles routes
+    else if (path === '/api/circles' && method === 'GET') {
       response = await handleListCircles(db, user.id);
     } else if (path === '/api/circles' && method === 'POST') {
       response = await handleCreateCircle(request, db, user.id);
@@ -184,22 +191,37 @@ export async function handleApiRoute(
       response = await handleUpdateCircle(request, path, db, user.id);
     } else if (path.match(/^\/api\/circles\/[^/]+$/) && method === 'DELETE') {
       response = await handleDeleteCircle(path, db, user.id);
-    } else if (path === '/api/interactions' && method === 'POST') {
+    }
+    // Interactions routes
+    else if (path === '/api/interactions' && method === 'POST') {
       response = await handleLogInteraction(request, db, user.id);
     } else if (path === '/api/interactions' && method === 'GET') {
       response = await handleListInteractions(url, db, user.id);
-    } else if (path === '/api/braindump/parse' && method === 'POST') {
+    }
+    // Braindump routes
+    else if (path === '/api/braindump/parse' && method === 'POST') {
       response = await handleBraindumpParse(request, env, user.id);
     } else if (path === '/api/braindump/refine' && method === 'POST') {
       response = await handleBraindumpRefine(request, env, user.id);
     } else if (path === '/api/braindump/execute' && method === 'POST') {
       response = await handleBraindumpExecute(request, env, user.id);
-    } else if (path === '/api/export' && method === 'GET') {
+    }
+    // Export route
+    else if (path === '/api/export' && method === 'GET') {
       response = await handleExport(url, db, user.id);
-    } else if (path.startsWith('/api/import/')) {
+    }
+    // Import routes (delegated)
+    else if (path.startsWith('/api/import/')) {
       const { handleImportRoute } = await import('./import');
       response = await handleImportRoute(request, env, user, path);
-    } else if (path === '/api/user' && method === 'GET') {
+    }
+    // Review routes (delegated)
+    else if (path.startsWith('/api/review/')) {
+      const { handleReviewRoute } = await import('./review');
+      response = await handleReviewRoute(request, env, user, path, method);
+    }
+    // User routes
+    else if (path === '/api/user' && method === 'GET') {
       response = await handleGetUser(auth.auth);
     } else if (path === '/api/user' && method === 'PATCH') {
       response = await handleUpdateUser(request, db, user.id);
@@ -211,13 +233,17 @@ export async function handleApiRoute(
       response = await handleGetNotificationPreferences(db, user.id);
     } else if (path === '/api/user/notifications' && method === 'PATCH') {
       response = await handleUpdateNotificationPreferences(request, db, user.id);
-    } else if (path === '/api/subscription' && method === 'GET') {
+    }
+    // Subscription routes
+    else if (path === '/api/subscription' && method === 'GET') {
       response = await handleGetSubscription(db, user.id);
     } else if (path === '/api/subscription/checkout' && method === 'POST') {
       response = await handleCheckout(request, env, auth.auth);
     } else if (path === '/api/subscription/portal' && method === 'POST') {
       response = await handlePortal(request, env, auth.auth);
-    } else if (path === '/api/auth/google/connect' && method === 'POST') {
+    }
+    // Google OAuth routes
+    else if (path === '/api/auth/google/connect' && method === 'POST') {
       const { handleGoogleConnect } = await import('./google-auth');
       response = await handleGoogleConnect({ user, env, origin });
     } else if (path === '/api/auth/google/disconnect' && method === 'POST') {
@@ -229,12 +255,18 @@ export async function handleApiRoute(
     } else if (path === '/api/auth/google/sync' && method === 'POST') {
       const { handleGoogleSync } = await import('./google-auth');
       response = await handleGoogleSync({ user, env, origin });
-    } else if (path.startsWith('/api/admin/')) {
+    }
+    // Admin routes (delegated)
+    else if (path.startsWith('/api/admin/')) {
       response = await handleAdminRoute(request, env, user.id, path, method, origin);
-    } else if (path.startsWith('/api/debug/')) {
+    }
+    // Debug routes (delegated)
+    else if (path.startsWith('/api/debug/')) {
       const { handleDebugRoute } = await import('./debug');
       response = await handleDebugRoute(request, env, user.id, path, method, origin);
-    } else {
+    }
+    // Not found
+    else {
       response = errorResponse('Not found', 404);
     }
   } catch (err) {
@@ -429,7 +461,6 @@ async function handleDeleteCircle(path: string, db: D1Database, userId: string):
 
 async function handleReorderCircles(request: Request, db: D1Database, userId: string): Promise<Response> {
   const body = await request.json<{ circleIds: string[] }>();
-
   if (!body.circleIds || !Array.isArray(body.circleIds) || body.circleIds.length === 0) {
     return errorResponse('circleIds array is required', 400);
   }
@@ -442,13 +473,11 @@ async function handleReorderCircles(request: Request, db: D1Database, userId: st
 
   const validIds = new Set(validCircles.map(c => c.id));
   const invalidIds = body.circleIds.filter(id => !validIds.has(id));
-
   if (invalidIds.length > 0) {
     return errorResponse(`Invalid circle IDs: ${invalidIds.join(', ')}`, 400);
   }
 
   await reorderCircles(db, userId, body.circleIds);
-
   await db
     .prepare(`UPDATE users SET circle_tab_order = ?, updated_at = datetime('now') WHERE id = ?`)
     .bind(JSON.stringify(body.circleIds), userId)
@@ -483,7 +512,6 @@ async function handleLogInteraction(request: Request, db: D1Database, userId: st
 
     const validIds = new Set(validCircles.map(c => c.id));
     const invalidIds = circleIds.filter(id => !validIds.has(id));
-
     if (invalidIds.length > 0) {
       return errorResponse(`Invalid circle IDs: ${invalidIds.join(', ')}`, 400);
     }
@@ -662,8 +690,10 @@ async function handleDeleteUser(request: Request, env: Env, db: D1Database, auth
       const placeholders = contactIds.map(() => '?').join(',');
       await db.prepare(`DELETE FROM circle_scores WHERE contact_id IN (${placeholders})`).bind(...contactIds).run();
       await db.prepare(`DELETE FROM contact_circles WHERE contact_id IN (${placeholders})`).bind(...contactIds).run();
+      await db.prepare(`DELETE FROM contact_analysis WHERE contact_id IN (${placeholders})`).bind(...contactIds).run();
     }
 
+    await db.prepare('DELETE FROM review_sessions WHERE user_id = ?').bind(user.id).run();
     await db.prepare('DELETE FROM interactions WHERE user_id = ?').bind(user.id).run();
     await db.prepare('DELETE FROM nudges WHERE user_id = ?').bind(user.id).run();
     await db.prepare('DELETE FROM usage_tracking WHERE user_id = ?').bind(user.id).run();
