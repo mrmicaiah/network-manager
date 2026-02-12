@@ -74,6 +74,7 @@ export type ConversationIntent =
   | 'add_contact'
   | 'braindump'
   | 'check_health'
+  | 'google_contacts'
   | 'small_talk'
   | 'help'
   | 'unknown';
@@ -196,6 +197,7 @@ INTENT TYPES:
 - add_contact: Adding a new person. "Add John Smith" / "New contact: Sarah Chen, she's a coworker" / "Remember my friend Jake, 555-1234"
 - braindump: Long message mentioning multiple people or events. "This week I called Mom, had coffee with Jake, ran into Sarah at the store, and need to follow up with Dave about the project"
 - check_health: Asking about overall network health, contact counts, or listing contacts. "How's my network?" / "Give me a summary" / "Dashboard" / "Status report" / "How many contacts do I have?" / "Who are my contacts?" / "List my contacts" / "Do I have any contacts?" / "Show me my network" / "Who's in my network?"
+- google_contacts: Requests to connect, import, sync, or disconnect Google Contacts. "Import my contacts" / "Connect to Google" / "Sync my contacts" / "Import from Google" / "Pull contacts from my phone" / "Disconnect Google" / "Link Google Contacts"
 - small_talk: Greetings, thanks, casual chat. "Hey" / "Thanks!" / "Good morning" / "You're the best" / "Haha"
 - help: Asking what Bethany can do. "Help" / "What can you do?" / "Commands" / "How does this work?"
 - unknown: Can't determine intent with reasonable confidence.
@@ -444,6 +446,8 @@ function getHandler(intent: ConversationIntent): SubHandler {
       return handleBraindump;
     case 'check_health':
       return handleCheckHealth;
+    case 'google_contacts':
+      return handleGoogleContacts;
     case 'small_talk':
       return handleSmallTalk;
     case 'help':
@@ -926,6 +930,57 @@ const handleSmallTalk: SubHandler = async (classified, user) => {
   };
 };
 
+// ===========================================================================
+// Google Contacts Handler
+// ===========================================================================
+
+const handleGoogleContacts: SubHandler = async (classified, user, env) => {
+  const lowerMessage = classified.rawMessage.toLowerCase();
+  
+  // Check if they want to disconnect
+  if (/disconnect|unlink|remove google|stop sync/i.test(lowerMessage)) {
+    const { handleDisconnect } = await import('./google-contacts-flow');
+    const result = await handleDisconnect(env, user);
+    return {
+      reply: result.reply,
+      expectsReply: result.expectsReply,
+    };
+  }
+  
+  // Check if they want to sync/re-sync
+  if (/sync|refresh|update|pull/i.test(lowerMessage)) {
+    const { handleResync, getConnectionStatus } = await import('./google-contacts-flow');
+    const { getConnectionStatus: checkStatus } = await import('./google-oauth-service');
+    
+    const status = await checkStatus(env.DB, user.id);
+    
+    if (!status.connected) {
+      // Not connected yet — offer to connect
+      const { offerGoogleConnect } = await import('./google-contacts-flow');
+      const result = await offerGoogleConnect(env, user);
+      return {
+        reply: result.reply,
+        expectsReply: result.expectsReply,
+      };
+    }
+    
+    // Already connected — do a resync
+    const result = await handleResync(env, user);
+    return {
+      reply: result.reply,
+      expectsReply: result.expectsReply,
+    };
+  }
+  
+  // Default: offer to connect (or show status if already connected)
+  const { offerGoogleConnect } = await import('./google-contacts-flow');
+  const result = await offerGoogleConnect(env, user);
+  return {
+    reply: result.reply,
+    expectsReply: result.expectsReply,
+  };
+};
+
 const handleHelp: SubHandler = async () => {
   return {
     reply: `Here's what I can help with:\n\n` +
@@ -936,7 +991,8 @@ const handleHelp: SubHandler = async () => {
       `🏷️ "Move Jake to inner circle" — change someone's layer\n` +
       `📝 "Sort my contacts" — organize unsorted contacts\n` +
       `➕ "Add Sarah Chen" — new contact\n` +
-      `⭕ "Show my circles" — manage circles\n\n` +
+      `⭕ "Show my circles" — manage circles\n` +
+      `📱 "Import my contacts" — connect Google Contacts\n\n` +
       `Or just brain-dump everything — "This week I called Mom, saw Jake at lunch, texted Sarah..." and I'll sort it out.`,
     expectsReply: false,
   };
@@ -971,6 +1027,8 @@ function fallbackClassification(body: string): ClassifiedMessage {
     intent = 'sort_contacts';
   } else if (/^add\s/i.test(lower)) {
     intent = 'add_contact';
+  } else if (/google|import.*contacts|sync.*contacts|connect.*contacts|pull.*contacts/i.test(lower)) {
+    intent = 'google_contacts';
   }
 
   return {
@@ -1040,7 +1098,7 @@ function formatMethodLabel(method: InteractionMethod): string {
 const VALID_INTENTS: ConversationIntent[] = [
   'query_contact', 'log_interaction', 'get_suggestions', 'manage_circles',
   'sort_contact', 'sort_contacts', 'add_contact', 'braindump', 'check_health',
-  'small_talk', 'help', 'unknown',
+  'google_contacts', 'small_talk', 'help', 'unknown',
 ];
 
 function validateIntent(raw: unknown): ConversationIntent {
