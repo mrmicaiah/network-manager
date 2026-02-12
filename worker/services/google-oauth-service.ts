@@ -573,8 +573,11 @@ function constantTimeEqual(a: string, b: string): boolean {
 /**
  * Build the OAuth redirect URI based on environment.
  * The callback is handled by the worker at /api/auth/google/callback.
+ * 
+ * NOTE: We use WORKER_URL, not DASHBOARD_URL, because the Pages site
+ * doesn't handle /api/* routes — only the Worker does.
  */
 function getRedirectUri(env: Env): string {
-  const baseUrl = env.DASHBOARD_URL || 'https://app.bethany.network';
-  return `${baseUrl}/api/auth/google/callback`;
+  const workerUrl = env.WORKER_URL || 'https://network-manager.micaiah-tasks.workers.dev';
+  return `${workerUrl}/api/auth/google/callback`;
 }
