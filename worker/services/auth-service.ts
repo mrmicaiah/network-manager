@@ -7,7 +7,7 @@
  * Login flow:
  *
  *   1. User enters phone number on login page
- *   2. Server generates a 6-digit code, stores hashed in D1, sends via SendBlue
+ *   2. Server generates a 6-digit code, stores hashed in D1, sends via Twilio (or SendBlue fallback)
  *   3. User enters code on web
  *   4. Server verifies code, creates a JWT session token
  *   5. JWT stored in HttpOnly cookie (7-day expiry, refreshed on activity)
@@ -165,10 +165,10 @@ function jsonAuthResponse(
  *   3. Expire any pending codes for this phone
  *   4. Generate a 6-digit code
  *   5. Store hashed code in D1
- *   6. Send code via SendBlue SMS
+ *   6. Send code via Twilio (primary) or SendBlue (fallback)
  *
  * @param db    - D1 database binding
- * @param env   - Worker environment (for SendBlue credentials)
+ * @param env   - Worker environment (for SMS credentials)
  * @param phone - E.164 phone number
  * @param now   - Override current time (for testing)
  */
@@ -221,12 +221,9 @@ export async function sendVerificationCode(
     .bind(id, phone, codeHash, currentTime.toISOString(), expiresAt.toISOString())
     .run();
 
-  // Step 6: Send via SendBlue
-  const sent = await sendSms(
-    env,
-    phone,
-    `Your Bethany login code is: ${code}\n\nThis code expires in ${CODE_EXPIRY_MINUTES} minutes. Don't share it with anyone.`,
-  );
+  // Step 6: Send via Twilio (primary) or SendBlue (fallback)
+  const message = `Your Bethany login code is: ${code}\n\nThis code expires in ${CODE_EXPIRY_MINUTES} minutes. Don't share it with anyone.`;
+  const sent = await sendSms(env, phone, message);
 
   if (!sent) {
     // Clean up the stored code if send failed
@@ -980,14 +977,81 @@ function normalizePhone(phone: string): string | null {
 }
 
 // ===========================================================================
-// SendBlue SMS (minimal inline — avoids circular dependency)
+// SMS Sending — Twilio (primary) with SendBlue fallback
 // ===========================================================================
 
 /**
- * Send an SMS via SendBlue API.
- * Returns true if the API accepted the message.
+ * Send an SMS via Twilio (primary) or SendBlue (fallback).
+ * Returns true if the message was accepted by either provider.
  */
 async function sendSms(
+  env: Env,
+  to: string,
+  message: string,
+): Promise<boolean> {
+  // Try Twilio first (if configured)
+  if (env.TWILIO_ACCOUNT_SID && env.TWILIO_AUTH_TOKEN && env.TWILIO_MESSAGING_SERVICE_SID) {
+    const twilioResult = await sendSmsTwilio(env, to, message);
+    if (twilioResult) {
+      console.log('[auth] SMS sent via Twilio');
+      return true;
+    }
+    console.warn('[auth] Twilio failed, falling back to SendBlue');
+  }
+
+  // Fallback to SendBlue
+  const sendBlueResult = await sendSmsSendBlue(env, to, message);
+  if (sendBlueResult) {
+    console.log('[auth] SMS sent via SendBlue');
+    return true;
+  }
+
+  console.error('[auth] Both Twilio and SendBlue failed');
+  return false;
+}
+
+/**
+ * Send SMS via Twilio API using Messaging Service.
+ */
+async function sendSmsTwilio(
+  env: Env,
+  to: string,
+  message: string,
+): Promise<boolean> {
+  try {
+    const twilioUrl = `https://api.twilio.com/2010-04-01/Accounts/${env.TWILIO_ACCOUNT_SID}/Messages.json`;
+    const auth = btoa(`${env.TWILIO_ACCOUNT_SID}:${env.TWILIO_AUTH_TOKEN}`);
+
+    const response = await fetch(twilioUrl, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Basic ${auth}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams({
+        To: to,
+        MessagingServiceSid: env.TWILIO_MESSAGING_SERVICE_SID!,
+        Body: message,
+      }),
+    });
+
+    if (!response.ok) {
+      const body = await response.text();
+      console.error(`[auth] Twilio send failed (${response.status}):`, body);
+      return false;
+    }
+
+    return true;
+  } catch (err) {
+    console.error('[auth] Twilio SMS error:', err);
+    return false;
+  }
+}
+
+/**
+ * Send SMS via SendBlue API.
+ */
+async function sendSmsSendBlue(
   env: Env,
   to: string,
   message: string,
@@ -1011,11 +1075,12 @@ async function sendSms(
     if (!response.ok) {
       const body = await response.text();
       console.error(`[auth] SendBlue send failed (${response.status}):`, body);
+      return false;
     }
 
-    return response.ok;
+    return true;
   } catch (err) {
-    console.error('[auth] SendBlue SMS failed:', err);
+    console.error('[auth] SendBlue SMS error:', err);
     return false;
   }
 }
