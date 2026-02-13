@@ -32,10 +32,11 @@ export interface Env {
   SENDBLUE_API_SECRET: string;
   SENDBLUE_PHONE_NUMBER: string;
 
-  // Secrets — Twilio (SMS fallback)
+  // Secrets — Twilio (SMS - primary for auth)
   TWILIO_ACCOUNT_SID?: string;
   TWILIO_AUTH_TOKEN?: string;
   TWILIO_PHONE_NUMBER?: string;
+  TWILIO_MESSAGING_SERVICE_SID?: string;
 
   // Secrets — Stripe
   STRIPE_SECRET_KEY: string;
