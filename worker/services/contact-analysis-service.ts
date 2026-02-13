@@ -6,7 +6,8 @@
  * where Bethany presents unsorted contacts with recommendations.
  *
  * Signals evaluated:
- *   - Family name matching (shared surnames)
+ *   - Family name matching (contact shares USER's surname)
+ *   - Family keyword detection (mom, dad, sister, etc.)
  *   - Work email domain detection
  *   - Recent interaction history
  *   - Google starred contacts (if imported)
@@ -82,20 +83,22 @@ function isWorkEmail(email: string | null): boolean {
   return !PERSONAL_EMAIL_DOMAINS.has(domain);
 }
 
-function findSharedSurnameContacts(
+/**
+ * Check if contact shares the USER's surname (not just any repeated surname).
+ */
+function sharesUserSurname(
   contact: ContactRow,
-  allContacts: ContactRow[],
-): string[] {
-  const surname = extractSurname(contact.name);
-  if (!surname) return [];
-
-  return allContacts
-    .filter(c => c.id !== contact.id)
-    .filter(c => {
-      const otherSurname = extractSurname(c.name);
-      return otherSurname === surname;
-    })
-    .map(c => c.id);
+  userName: string | null,
+): boolean {
+  if (!userName) return false;
+  
+  const userSurname = extractSurname(userName);
+  if (!userSurname) return false;
+  
+  const contactSurname = extractSurname(contact.name);
+  if (!contactSurname) return false;
+  
+  return userSurname === contactSurname;
 }
 
 function calculateFrequencyTier(interactionCount: number): ContactFrequencyTier {
@@ -111,23 +114,27 @@ function calculateFrequencyTier(interactionCount: number): ContactFrequencyTier 
 
 export function analyzeContactSignals(
   contact: ContactRow,
-  allContacts: ContactRow[],
+  userName: string | null,
   interactionCount: number,
   hasRecentInteraction: boolean,
   googleStarred: boolean = false,
   hasBirthday: boolean = false,
 ): ContactAnalysisSignals {
-  const sharedSurnameContacts = findSharedSurnameContacts(contact, allContacts);
+  // Check if contact shares the USER's surname (true family indicator)
+  const matchesUserSurname = sharesUserSurname(contact, userName);
+  
+  // Check for family keywords in name (mom, dad, sister, etc.)
+  const hasFamilyWord = hasFamilyKeyword(contact.name);
 
   return {
-    family_name_match: sharedSurnameContacts.length >= 2 || hasFamilyKeyword(contact.name),
+    family_name_match: matchesUserSurname || hasFamilyWord,
     work_email_domain: isWorkEmail(contact.email),
     has_recent_interaction: hasRecentInteraction,
     google_starred: googleStarred,
     contact_frequency_tier: calculateFrequencyTier(interactionCount),
     has_birthday: hasBirthday,
     has_notes: !!contact.notes && contact.notes.trim().length > 0,
-    shared_surname_contacts: sharedSurnameContacts,
+    shared_surname_contacts: [], // Deprecated - no longer used
   };
 }
 
@@ -185,16 +192,18 @@ export function calculateConfidence(signals: ContactAnalysisSignals): AnalysisCo
 }
 
 export function generateReasoning(
+  contact: ContactRow,
   signals: ContactAnalysisSignals,
   suggestedIntent: SortableIntentType,
 ): string {
   const reasons: string[] = [];
 
   if (signals.family_name_match) {
-    if (signals.shared_surname_contacts.length >= 2) {
-      reasons.push("Shares your last name with other contacts—family member?");
+    // Check which family signal triggered
+    if (hasFamilyKeyword(contact.name)) {
+      reasons.push("Name suggests family—keeping them close?");
     } else {
-      reasons.push("Name suggests a family relationship.");
+      reasons.push("Shares your last name—family member?");
     }
   }
 
@@ -242,18 +251,18 @@ export interface ContactAnalysisResult {
 
 export function analyzeContact(
   contact: ContactRow,
-  allContacts: ContactRow[],
+  userName: string | null,
   interactionCount: number,
   hasRecentInteraction: boolean,
   googleStarred: boolean = false,
   hasBirthday: boolean = false,
 ): ContactAnalysisResult {
   const signals = analyzeContactSignals(
-    contact, allContacts, interactionCount, hasRecentInteraction, googleStarred, hasBirthday,
+    contact, userName, interactionCount, hasRecentInteraction, googleStarred, hasBirthday,
   );
   const suggested_intent = suggestIntent(signals);
   const confidence = calculateConfidence(signals);
-  const reasoning = generateReasoning(signals, suggested_intent);
+  const reasoning = generateReasoning(contact, signals, suggested_intent);
 
   return { suggested_intent, confidence, reasoning, signals };
 }
@@ -349,16 +358,19 @@ export async function analyzeUserContacts(
   db: D1Database,
   userId: string,
 ): Promise<{ analyzed: number; skipped: number }> {
+  // Get the user's name for surname matching
+  const user = await db.prepare(`
+    SELECT name FROM users WHERE id = ?
+  `).bind(userId).first<{ name: string | null }>();
+  
+  const userName = user?.name ?? null;
+
   const { results: contacts } = await db.prepare(`
     SELECT * FROM contacts
     WHERE user_id = ? AND intent = 'new' AND archived = 0
   `).bind(userId).all<ContactRow>();
 
   if (contacts.length === 0) return { analyzed: 0, skipped: 0 };
-
-  const { results: allContacts } = await db.prepare(`
-    SELECT * FROM contacts WHERE user_id = ? AND archived = 0
-  `).bind(userId).all<ContactRow>();
 
   // Get existing analyses in batches (handles >100 contacts)
   const contactIds = contacts.map(c => c.id);
@@ -374,7 +386,7 @@ export async function analyzeUserContacts(
     }
 
     const stats = await getInteractionStats(db, contact.id);
-    const analysis = analyzeContact(contact, allContacts, stats.count, stats.hasRecent);
+    const analysis = analyzeContact(contact, userName, stats.count, stats.hasRecent);
     await saveContactAnalysis(db, contact.id, analysis);
     analyzed++;
   }
